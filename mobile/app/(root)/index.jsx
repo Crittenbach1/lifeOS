@@ -23,6 +23,11 @@ export default function Page() {
     <View>
       <SignedIn>
         <Text>Hello {user?.emailAddresses[0].emailAddress}</Text>
+        <Text>Today's total min: {summary.today}</Text>
+        <Text>Weekly total min: {summary.thisWeek}</Text>
+        <Text>Monthly total min: {summary.thisMonth}</Text>
+        <Text>Yearly total min: {summary.thisYear}</Text>
+
         <SignOutButton />
       </SignedIn>
       <SignedOut>
