@@ -5,6 +5,7 @@ import { SignOutButton } from '@/components/SignOutButton';
 import { useBikeRides } from '../../hooks/useBikeRides';
 import { useEffect } from 'react';
 import PageLoader from "../../components/PageLoader";
+import { styles } from "../assets/styles/home.styles";
 
 export default function Page() {
   const { user } = useUser();
@@ -17,24 +18,23 @@ export default function Page() {
   if(isLoading) return <PageLoader />
 
   return (
-    <View>
-      <SignedIn>
-        <Text>Hello {user?.emailAddresses[0].emailAddress}</Text>
-        <Text>Today's total min: {summary.today}</Text>
-        <Text>Weekly total min: {summary.thisWeek}</Text>
-        <Text>Monthly total min: {summary.thisMonth}</Text>
-        <Text>Yearly total min: {summary.thisYear}</Text>
+    <View style={styles.container}>
+      <View style={styles.content}>
+        {/* HEADER */}
+        <View style={styles.header}>
+          {/* LEFT */}
+          <View style={styles.headerLeft}>
+            <Image
+              source={require("../../assets/images/lifeOSicon.png")}
+            />
 
-        <SignOutButton />
-      </SignedIn>
-      <SignedOut>
-        <Link href="/(auth)/sign-in">
-          <Text>Sign in</Text>
-        </Link>
-        <Link href="/(auth)/sign-up">
-          <Text>Sign up</Text>
-        </Link>
-      </SignedOut>
+          </View>
+          {/* RIGHT */}
+          <View>
+
+          </View>
+        </View>
+      </View>
     </View>
   )
 }
