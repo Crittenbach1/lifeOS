@@ -5,46 +5,46 @@ import { API_URL } from "../constants/api";
 //const API_URL = "http://localhost:5001/api";
 //const API_URL = "https://lifeos-fak9.onrender.com/api";
 
-export const useBikeRides = (userId) => {
-  const [bikeRides, setBikeRides] = useState([]);
+export const useIncome = (userId) => {
+  const [incomes, setIncomes] = useState([]);
   const [summary, setSummary] = useState({
-    minutesToday: 0,
-    minutesThisWeek: 0,
-    minutesThisMonth: 0,
-    minutesThisYear: 0,
+    incomeToday: 0,
+    incomeThisWeek: 0,
+    incomeThisMonth: 0,
+    incomeThisYear: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchBikeRides = useCallback(async () => {
+  const fetchIncome = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/bikeRides/${userId}`);
+      const response = await fetch(`${API_URL}/income/${userId}`);
       const data = await response.json();
-      setBikeRides(data);
+      setIncomes(data);
     } catch (error) {
-      console.error("Error fetching bike rides:", error);
+      console.error("Error fetching income:", error);
     }
   }, [userId]);
 
   const fetchSummary = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/bikeRides/summary/${userId}`);
+      const response = await fetch(`${API_URL}/income/summary/${userId}`);
       const data = await response.json();
       setSummary(data);
     } catch (error) {
-      console.error("Error fetching summary:", error);
+      console.error("Error fetching income summary:", error);
     }
   }, [userId]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      await Promise.all([fetchBikeRides(), fetchSummary()]);
+      await Promise.all([fetchIncome(), fetchSummary()]);
     } catch (error) {
       console.error("Error loading data:", error);
     } finally {
       setIsLoading(false);
     }
-  }, [fetchBikeRides, fetchSummary]);
+  }, [fetchIncome, fetchSummary]);
 
   useEffect(() => {
     if (userId) {
@@ -52,20 +52,20 @@ export const useBikeRides = (userId) => {
     }
   }, [loadData, userId]);
 
-  const deleteBikeRide = useCallback(async (id) => {
+  const deleteIncome = useCallback(async (id) => {
     try {
-      const response = await fetch(`${API_URL}/bikeRides/${id}`, {
+      const response = await fetch(`${API_URL}/income/${id}`, {
         method: "DELETE",
       });
-      if (!response.ok) throw new Error("Failed to delete bike ride");
+      if (!response.ok) throw new Error("Failed to delete income");
 
       await loadData();
-      Alert.alert("Success", "Bike ride deleted successfully");
+      Alert.alert("Success", "income deleted successfully");
     } catch (error) {
-      console.error("Error deleting bike ride:", error);
+      console.error("Error deleting income:", error);
       Alert.alert("Error", error.message);
     }
   }, [loadData]);
 
-  return { bikeRides, summary, isLoading, loadData, deleteBikeRide };
+  return { incomes, summary, isLoading, loadData, deleteIncome };
 };
