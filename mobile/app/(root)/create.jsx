@@ -86,23 +86,25 @@ const CreateScreen = () => {
       let endpoint = "";
       let body = {};
 
-      if (selectedCategory === "Income") {
-        endpoint = `${API_URL}/Income`;
-        body = {
-          user_id: user.id,
-          amount: formattedAmount,
-          minutes_worked: 0,
-          created_at: now,
-        };
-      } else {
-        endpoint = `${API_URL}/BikeRides`; // Extend for Water or Workout later
+      if (selectedCategory === "Bike Ride") {
+        endpoint = `${API_URL}/bikeRides`; 
         body = {
           user_id: user.id,
           lengthInSeconds: formattedAmount,
           created_at: now,
           start_time: formattedTime,
         };
+      } 
+      if (selectedCategory === "Income") {
+        endpoint = `${API_URL}/income`; 
+        body = {
+          user_id: user.id,
+          amount: formattedAmount,
+          minutes_worked: 0,
+          created_at: now,
+        };
       }
+
 
       const response = await fetch(endpoint, {
         method: "POST",

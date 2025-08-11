@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { initDB } from "./config/db.js";
 import bikeRidesRoute from "./routes/bikeRidesRoute.js";
 import incomeRoute from "./routes/incomeRoute.js";
+import drinkWaterRoute from "./routes/drinkWaterRoute.js";
 import { job } from "./config/cron.js";
 
 
@@ -34,6 +35,7 @@ console.log("my port:", process.env.PORT);
 
 app.use("/api/bikeRides", bikeRidesRoute);
 app.use("/api/income", incomeRoute);
+
 
 initDB().then(() => {
     app.listen(PORT, () => {
