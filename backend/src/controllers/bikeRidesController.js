@@ -60,7 +60,7 @@ export async function deleteBikeRide(req,res) {
         }
 }
 
-export async function getSummaryByUserId(req, res) {
+export async function getBikeRideSummaryByUserId(req, res) {
   console.log(new Date().toLocaleDateString('en-CA'));
   const today = new Date().toLocaleDateString('en-CA'); 
 

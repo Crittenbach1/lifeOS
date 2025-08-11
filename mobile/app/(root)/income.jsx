@@ -9,8 +9,6 @@ import IncomeProgressWheel from "../../components/IncomeProgressWheel";
 import IncomeWeeklyProgressBar from '../../components/IncomeWeeklyProgressBar';
 import IncomeMonthlyProgressBar from '../../components/IncomeMonthlyProgressBar';
 import IncomeYearlyProgressBar from '../../components/IncomeYearlyProgressBar';
-//import MonthlyLineChart from '../../components/MonthlyLineChart';
-import { getLastFiveMonthsSummary } from "@/lib/getLastFiveMonthsSummary";
 
 export default function Page() {
   const { user } = useUser();
@@ -18,9 +16,7 @@ export default function Page() {
   const [refreshing, setRefreshing] = useState(false);
 
   const { incomes, summary, isLoading, loadData } = useIncome(user.id);
-  const chartData = getLastFiveMonthsSummary(incomes);
  
-  console.log(summary);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -33,6 +29,9 @@ export default function Page() {
   }, [loadData]);
 
   if (isLoading && !refreshing) return <PageLoader />;
+
+    //console.log("income page:", summary);
+
 
   return (
     <ScrollView

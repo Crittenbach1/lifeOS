@@ -32,6 +32,8 @@ export default function Page() {
 
   if (isLoading && !refreshing) return <PageLoader />;
 
+  console.log("bikeride page:", summary);
+
   return (
     <ScrollView
       style={styles.container}

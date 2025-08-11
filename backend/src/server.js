@@ -37,6 +37,7 @@ app.use("/api/bikeRides", bikeRidesRoute);
 app.use("/api/income", incomeRoute);
 app.use("/api/drinkWater", drinkWaterRoute);
 
+
 initDB().then(() => {
     app.listen(PORT, () => {
         console.log("server is up and running on PORT:", PORT);

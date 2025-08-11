@@ -86,24 +86,24 @@ const CreateScreen = () => {
       let endpoint = "";
       let body = {};
 
+      if (selectedCategory === "Bike Ride") {
+        endpoint = `${API_URL}/bikeRides`; 
+        body = {
+          user_id: user.id,
+          lengthInSeconds: formattedAmount,
+          created_at: now,
+          start_time: formattedTime,
+        };
+      } 
       if (selectedCategory === "Income") {
-        endpoint = `${API_URL}/Income`;
+        endpoint = `${API_URL}/income`; 
         body = {
           user_id: user.id,
           amount: formattedAmount,
           minutes_worked: 0,
           created_at: now,
-        };
-      } else if (selectedCategory === "Drink Water") {
-        endpoint = `${API_URL}/drinkWater`;
-        body = {
-          user_id: user.id,
-          amount: formattedAmount * 0.5,
-          created_at: now,
-        };
-      } 
+      };
 
-      console.log("POST", { selectedCategory, endpoint, body });
 
       const response = await fetch(endpoint, {
         method: "POST",
