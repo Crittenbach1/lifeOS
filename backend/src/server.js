@@ -3,7 +3,6 @@ import dotenv from "dotenv";
 import { initDB } from "./config/db.js";
 import bikeRidesRoute from "./routes/bikeRidesRoute.js";
 import incomeRoute from "./routes/incomeRoute.js";
-import drinkWaterRoute from "./routes/drinkWaterRoute.js";
 import { job } from "./config/cron.js";
 
 
