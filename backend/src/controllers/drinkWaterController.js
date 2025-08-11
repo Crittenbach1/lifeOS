@@ -92,9 +92,7 @@ export async function getSummaryByUserId(req, res) {
       SELECT CURRENT_DATE::date AS today,
              (CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::int)::date AS week_start
     `;
-
-      console.log("dates query result:", dates);
-
+    
     const [sumToday, sumWeek, sumMonth, sumYear] = await Promise.all([
       sql`
         SELECT COALESCE(SUM(amount), 0)::float AS total
@@ -128,7 +126,7 @@ export async function getSummaryByUserId(req, res) {
       thisYear:  sumYear[0].total,
     });
   } catch (error) {
-    console.error("Error getting drinkWater summary:", error);
+    console.error("Error getting drinkWater summary: ", error);
     res.status(500).json({ message: "Internal server error" });
   }
 }

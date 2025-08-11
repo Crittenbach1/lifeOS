@@ -12,7 +12,6 @@ import WeeklyWaterProgressBar from "../../components/drinkWaterWeeklyProgressBar
 import MonthlyWaterProgressBar from "../../components/drinkWaterMonthlyProgressBar.jsx";
 import YearlyWaterProgressBar from "../../components/drinkWaterYearlyProgressBar.jsx";
 
-import { getLastFiveMonthsSummary } from "@/lib/getLastFiveMonthsSummary";
 
 export default function Page() {
   const { user } = useUser();
@@ -21,8 +20,6 @@ export default function Page() {
 
   const { drinkWater, summary, isLoading, loadData } = useDrinkWater(user.id);
 
-  // If getLastFiveMonthsSummary currently sums minutes, switch to amount for water.
-  const chartData = getLastFiveMonthsSummary(drinkWater);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -37,7 +34,7 @@ export default function Page() {
   if (isLoading && !refreshing) return <PageLoader />;
 
   // pull user goal from settings if you have it; hardcode for now
-  const DAILY_GOAL_OZ = 64;
+  const DAILY_GOAL_LITERS = 3;
 
   return (
     <ScrollView
@@ -50,19 +47,14 @@ export default function Page() {
     >
       <WaterProgressCup
         value={Number(summary?.today ?? 0)}
-        goal={DAILY_GOAL_OZ}
-        unit="oz"
+        goal={DAILY_GOAL_LITERS}
+        unit="liters"
         width={180}
         height={220}
       />
 
-      <WeeklyWaterProgressBar summary={summary} goal={64 * 7} unit="oz" />
-      <MonthlyWaterProgressBar summary={summary} goal={64 * 30} unit="oz" />
-      <YearlyWaterProgressBar summary={summary} goal={64 * 365} unit="oz" />
-
-      {/* If you want the line chart here, import and render it:
-         <DrinkWaterMonthlyLineChart data={chartData} unit="oz" />
-      */}
+   
+  
     </ScrollView>
   );
 }
