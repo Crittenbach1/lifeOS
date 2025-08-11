@@ -94,15 +94,16 @@ const CreateScreen = () => {
           minutes_worked: 0,
           created_at: now,
         };
-      } else {
-        endpoint = `${API_URL}/BikeRides`; // Extend for Water or Workout later
+      } else if (selectedCategory === "Drink Water") {
+        endpoint = `${API_URL}/drinkWater`;
         body = {
           user_id: user.id,
-          lengthInSeconds: formattedAmount,
+          amount: formattedAmount * 0.5,
           created_at: now,
-          start_time: formattedTime,
         };
-      }
+      } 
+
+      console.log("POST", { selectedCategory, endpoint, body });
 
       const response = await fetch(endpoint, {
         method: "POST",

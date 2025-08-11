@@ -61,56 +61,56 @@ export async function deleteBikeRide(req,res) {
 }
 
 export async function getSummaryByUserId(req, res) {
-  // Get today's date as YYYY-MM-DD
-  const today = new Date().toLocaleDateString("en-CA");
+  console.log(new Date().toLocaleDateString('en-CA'));
+  const today = new Date().toLocaleDateString('en-CA'); 
 
-  // Get the current date and start of week (Sunday)
+    // Get the current date and start of week (Sunday)
   const now = new Date();
   const dayOfWeek = now.getDay(); // 0 (Sun) to 6 (Sat)
   const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - dayOfWeek);
-  const weekStartString = weekStart.toLocaleDateString("en-CA");
+  weekStart.setDate(now.getDate() - dayOfWeek); // move back to Sunday
+  const weekStartString = weekStart.toLocaleDateString('en-CA'); // format to "YYYY-MM-DD"
 
   try {
     const { userId } = req.params;
 
-    const todayTotal = await sql`
-      SELECT COALESCE(SUM(amount), 0)::float AS total
-      FROM drinkWater
+    const minutesToday = await sql`
+      SELECT ROUND(COALESCE(SUM(lengthInSeconds), 0) / 60.0, 2) AS minutes
+      FROM bikeRides
       WHERE user_id = ${userId}
         AND created_at = ${today}
     `;
 
-    const weekTotal = await sql`
-      SELECT COALESCE(SUM(amount), 0)::float AS total
-      FROM drinkWater
+    const minutesThisWeek = await sql`
+      SELECT ROUND(COALESCE(SUM(lengthInSeconds), 0) / 60.0, 2) AS minutes
+      FROM bikeRides
       WHERE user_id = ${userId}
         AND created_at >= ${weekStartString}
         AND created_at <= ${today}
     `;
 
-    const monthTotal = await sql`
-      SELECT COALESCE(SUM(amount), 0)::float AS total
-      FROM drinkWater
+    const minutesThisMonth = await sql`
+      SELECT ROUND(COALESCE(SUM(lengthInSeconds), 0) / 60.0, 2) AS minutes
+      FROM bikeRides
       WHERE user_id = ${userId}
       AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
     `;
 
-    const yearTotal = await sql`
-      SELECT COALESCE(SUM(amount), 0)::float AS total
-      FROM drinkWater
+    const minutesThisYear = await sql`
+      SELECT ROUND(COALESCE(SUM(lengthInSeconds), 0) / 60.0, 2) AS minutes
+      FROM bikeRides
       WHERE user_id = ${userId}
       AND date_trunc('year', created_at) = date_trunc('year', CURRENT_DATE)
     `;
 
     res.json({
-      today: todayTotal[0].total,
-      thisWeek: weekTotal[0].total,
-      thisMonth: monthTotal[0].total,
-      thisYear: yearTotal[0].total,
+      today: parseFloat(minutesToday[0].minutes),
+      thisWeek: parseFloat(minutesThisWeek[0].minutes),
+      thisMonth: parseFloat(minutesThisMonth[0].minutes),
+      thisYear: parseFloat(minutesThisYear[0].minutes),
     });
   } catch (error) {
-    console.error("Error getting drinkWater summary:", error);
+    console.error("Error getting bikeride summary:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 }
