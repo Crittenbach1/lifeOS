@@ -61,76 +61,53 @@ export async function deleteIncome(req,res) {
 }
 
 export async function getSummaryByUserId(req, res) {
-  console.log(new Date().toLocaleDateString('en-CA'));
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = new Date().toLocaleDateString("en-CA");
 
-  // Get start of the week (Sunday)
   const now = new Date();
-  const dayOfWeek = now.getDay();
+  const dayOfWeek = now.getDay(); // 0..6 (Sun..Sat)
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() - dayOfWeek);
-  const weekStartString = weekStart.toLocaleDateString('en-CA');
+  const weekStartString = weekStart.toLocaleDateString("en-CA");
 
   try {
     const { userId } = req.params;
 
-    const incomeToday = await sql`
-      SELECT 
-        COALESCE(SUM(amount), 0) AS total_income,
-        COALESCE(SUM(minutes_worked), 0) AS total_minutes
-      FROM income
-      WHERE user_id = ${userId}
-        AND created_at = ${today}
-    `;
-
-    const incomeThisWeek = await sql`
-      SELECT 
-        COALESCE(SUM(amount), 0) AS total_income,
-        COALESCE(SUM(minutes_worked), 0) AS total_minutes
-      FROM income
-      WHERE user_id = ${userId}
-        AND created_at >= ${weekStartString}
-        AND created_at <= ${today}
-    `;
-
-    const incomeThisMonth = await sql`
-      SELECT 
-        COALESCE(SUM(amount), 0) AS total_income,
-        COALESCE(SUM(minutes_worked), 0) AS total_minutes
-      FROM income
-      WHERE user_id = ${userId}
-        AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
-    `;
-
-    const incomeThisYear = await sql`
-      SELECT 
-        COALESCE(SUM(amount), 0) AS total_income,
-        COALESCE(SUM(minutes_worked), 0) AS total_minutes
-      FROM income
-      WHERE user_id = ${userId}
-        AND date_trunc('year', created_at) = date_trunc('year', CURRENT_DATE)
-    `;
+    const [todayTotal, weekTotal, monthTotal, yearTotal] = await Promise.all([
+      sql`
+        SELECT COALESCE(SUM(amount), 0)::float AS total
+        FROM drinkWater
+        WHERE user_id = ${userId}
+          AND created_at = ${today}
+      `,
+      sql`
+        SELECT COALESCE(SUM(amount), 0)::float AS total
+        FROM drinkWater
+        WHERE user_id = ${userId}
+          AND created_at >= ${weekStartString}
+          AND created_at <= ${today}
+      `,
+      sql`
+        SELECT COALESCE(SUM(amount), 0)::float AS total
+        FROM drinkWater
+        WHERE user_id = ${userId}
+          AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
+      `,
+      sql`
+        SELECT COALESCE(SUM(amount), 0)::float AS total
+        FROM drinkWater
+        WHERE user_id = ${userId}
+          AND date_trunc('year', created_at) = date_trunc('year', CURRENT_DATE)
+      `,
+    ]);
 
     res.json({
-      today: {
-        income: parseFloat(incomeToday[0].total_income),
-        minutesWorked: parseInt(incomeToday[0].total_minutes),
-      },
-      thisWeek: {
-        income: parseFloat(incomeThisWeek[0].total_income),
-        minutesWorked: parseInt(incomeThisWeek[0].total_minutes),
-      },
-      thisMonth: {
-        income: parseFloat(incomeThisMonth[0].total_income),
-        minutesWorked: parseInt(incomeThisMonth[0].total_minutes),
-      },
-      thisYear: {
-        income: parseFloat(incomeThisYear[0].total_income),
-        minutesWorked: parseInt(incomeThisYear[0].total_minutes),
-      },
+      today: todayTotal[0].total,
+      thisWeek: weekTotal[0].total,
+      thisMonth: monthTotal[0].total,
+      thisYear: yearTotal[0].total,
     });
   } catch (error) {
-    console.error("Error getting income summary:", error);
+    console.error("Error getting drinkWater summary:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 }
