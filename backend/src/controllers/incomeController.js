@@ -2,7 +2,7 @@
 import { sql } from "../config/db.js";
 
 /** GET /income/:userId */
-export async function getIncomesByUserId(req, res) {
+export async function getIncomeByUserId(req, res) {
   try {
     const { userId } = req.params;
 
