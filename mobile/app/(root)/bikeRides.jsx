@@ -32,7 +32,7 @@ export default function Page() {
 
   if (isLoading && !refreshing) return <PageLoader />;
 
-  console.log("bikeride page:", summary);
+  //console.log("bikeride page:", summary);
 
   return (
     <ScrollView

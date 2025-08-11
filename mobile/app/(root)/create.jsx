@@ -51,13 +51,6 @@ const getAmountLabel = (category) => {
   }
 };
 
-const now = new Date();
-const formattedTime = now.toLocaleTimeString("en-US", {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: true,
-});
-
 const CreateScreen = () => {
   const router = useRouter();
   const { user } = useUser();
@@ -71,58 +64,83 @@ const CreateScreen = () => {
     if (!selectedCategory) return Alert.alert("Error", "Please select a category");
 
     if (selectedCategory === "Workout") {
-      if (!selectedWorkout) return Alert.alert("Error", "Please select a workout exercise");
+      if (!selectedWorkout)
+        return Alert.alert("Error", "Please select a workout exercise");
     } else {
-      if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
         return Alert.alert("Error", "Please enter a valid number");
       }
     }
 
     setIsLoading(true);
     try {
-      const formattedAmount =
-        selectedCategory === "Workout" ? selectedWorkout : parseFloat(amount);
+      const createdAt = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+      const startTime = new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
 
       let endpoint = "";
       let body = {};
 
       if (selectedCategory === "Bike Ride") {
-        endpoint = `${API_URL}/bikeRides`; 
+        endpoint = `${API_URL}/bikeRides`;
         body = {
           user_id: user.id,
-          lengthInSeconds: formattedAmount,
-          created_at: now,
-          start_time: formattedTime,
+          lengthInSeconds: Number(amount),
+          start_time: startTime,
+          created_at: createdAt, // remove if backend defaults created_at
         };
-      } 
-      if (selectedCategory === "Income") {
-        endpoint = `${API_URL}/income`; 
+      } else if (selectedCategory === "Income") {
+        endpoint = `${API_URL}/income`;
         body = {
           user_id: user.id,
-          amount: formattedAmount,
+          amount: Number(amount),
           minutes_worked: 0,
-          created_at: now,
-      };
-
+          created_at: createdAt, // remove if backend defaults created_at
+        };
+      } else if (selectedCategory === "Drink Water") {
+        endpoint = `${API_URL}/drinkWater`;
+        body = {
+          user_id: user.id,
+          amount: Number(amount),
+          created_at: createdAt,
+        };
+      } else if (selectedCategory === "Workout") {
+        // adjust endpoint/fields to match your backend when you add it
+        endpoint = `${API_URL}/workout`;
+        body = {
+          user_id: user.id,
+          exercise: selectedWorkout,
+          created_at: createdAt,
+        };
+      } else {
+        throw new Error("Unsupported category");
+      }
 
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to save entry");
+        let msg;
+        try {
+          const j = await response.json();
+          msg = j.message || j.error;
+        } catch {
+          msg = await response.text();
+        }
+        throw new Error(msg || `HTTP ${response.status}`);
       }
 
       Alert.alert("Success", "Entry saved!");
       router.back();
     } catch (error) {
-      Alert.alert("Error", error.message || "Failed to save");
       console.error("Create error:", error);
+      Alert.alert("Error", error.message || "Failed to save");
     } finally {
       setIsLoading(false);
     }
@@ -146,10 +164,15 @@ const CreateScreen = () => {
       </View>
 
       <View style={styles.card}>
-        {!!selectedCategory && (
-          selectedCategory === "Workout" ? (
+        {!!selectedCategory &&
+          (selectedCategory === "Workout" ? (
             <View style={styles.inputContainer}>
-              <Ionicons name="barbell" size={22} color={COLORS.textLight} style={styles.inputIcon} />
+              <Ionicons
+                name="barbell"
+                size={22}
+                color={COLORS.textLight}
+                style={styles.inputIcon}
+              />
               <TouchableOpacity
                 style={[styles.input, { justifyContent: "center" }]}
                 onPress={() =>
@@ -179,8 +202,7 @@ const CreateScreen = () => {
                 keyboardType="numeric"
               />
             </View>
-          )
-        )}
+          ))}
 
         <Text style={styles.sectionTitle}>
           <Ionicons name="pricetag-outline" size={16} color={COLORS.text} /> Category

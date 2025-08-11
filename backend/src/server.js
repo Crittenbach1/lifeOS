@@ -34,6 +34,7 @@ console.log("my port:", process.env.PORT);
 
 app.use("/api/bikeRides", bikeRidesRoute);
 app.use("/api/income", incomeRoute);
+app.use("/api/drinkWater", drinkWaterRoute);
 
 
 

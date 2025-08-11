@@ -3,9 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 import { AnimatedCircularProgress } from 'react-native-circular-progress';
 
 export default function IncomeProgressWheel({ summary }) {
-  console.log(summary);
   const dailyGoal = 33;
-  const income = summary?.incomeToday?.income ?? 0;
+  const income = summary?.today?.income ?? 0;
   const fill = (income / dailyGoal) * 100;
 
 
