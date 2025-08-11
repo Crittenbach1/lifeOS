@@ -87,30 +87,25 @@ export async function getSummaryByUserId(req, res) {
   try {
     const { userId } = req.params;
 
-    // Compute date boundaries in SQL to avoid locale issues
-    const [today, weekStart] = await sql`
-      WITH nowdates AS (
-        SELECT CURRENT_DATE AS today,
-               (CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::INT) AS week_start -- Sunday
-      )
-      SELECT today, week_start FROM nowdates
+    // Get the dates in one row
+    const [{ today, week_start }] = await sql`
+      SELECT CURRENT_DATE::date AS today,
+             (CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::int)::date AS week_start
     `;
 
-    const todayDate = today[0].today;           // e.g. 2025-08-11
-    const weekStartDate = weekStart[0].week_start;
+      console.log("dates query result:", dates);
 
     const [sumToday, sumWeek, sumMonth, sumYear] = await Promise.all([
       sql`
         SELECT COALESCE(SUM(amount), 0)::float AS total
         FROM drinkWater
-        WHERE user_id = ${userId} AND created_at = ${todayDate}
+        WHERE user_id = ${userId} AND created_at = ${today}
       `,
       sql`
         SELECT COALESCE(SUM(amount), 0)::float AS total
         FROM drinkWater
         WHERE user_id = ${userId}
-          AND created_at >= ${weekStartDate}
-          AND created_at <= ${todayDate}
+          AND created_at BETWEEN ${week_start} AND ${today}
       `,
       sql`
         SELECT COALESCE(SUM(amount), 0)::float AS total
@@ -127,10 +122,10 @@ export async function getSummaryByUserId(req, res) {
     ]);
 
     res.json({
-      today: sumToday[0].total,
-      thisWeek: sumWeek[0].total,
+      today:     sumToday[0].total,
+      thisWeek:  sumWeek[0].total,
       thisMonth: sumMonth[0].total,
-      thisYear: sumYear[0].total,
+      thisYear:  sumYear[0].total,
     });
   } catch (error) {
     console.error("Error getting drinkWater summary:", error);
