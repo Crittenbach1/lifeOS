@@ -2,21 +2,54 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { ProgressBar } from "react-native-paper";
 
-export default function YearlyWaterProgressBar({
+// Convert liters (source of truth) to chosen display unit
+function convertFromLiters(liters, unit) {
+  switch (unit) {
+    case "ml": return liters * 1000;
+    case "oz": return liters * 33.814;
+    case "L":
+    default:   return liters;
+  }
+}
+
+function formatAmount(value, unit) {
+  if (unit === "ml" || unit === "oz") return `${Math.round(value)} ${unit}`;
+  return `${value.toFixed(1)} L`; // L: one decimal
+}
+
+export default function DrinkWaterYearlyProgressBar({
   summary,
-  goal = 64 * 365, // default: 64 oz/day × 365 days
-  unit = "oz",
+  goalLiters = 1008, // yearly goal in liters
+  unit = "L",        // "L" | "ml" | "oz" (display only)
 }) {
-  const consumed = Number(summary?.thisYear ?? 0);
-  const safeConsumed = Number.isFinite(consumed) ? consumed : 0;
-  const progress = Math.max(0, Math.min(safeConsumed / goal, 1));
+  // Accept either a number or an object { amount, count }
+  const rawYearly = summary?.thisYear;
+  const litersConsumedRaw =
+    rawYearly && typeof rawYearly === "object"
+      ? Number(rawYearly.amount)
+      : Number(rawYearly);
+
+  const litersConsumed = Number.isFinite(litersConsumedRaw)
+    ? Math.max(0, litersConsumedRaw)
+    : 0;
+
+  const progress = Math.max(0, Math.min(litersConsumed / goalLiters, 1));
+
+  const displayConsumed = convertFromLiters(litersConsumed, unit);
+  const displayGoal = convertFromLiters(goalLiters, unit);
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} accessible accessibilityLabel="Yearly water progress">
       <Text style={styles.label}>Yearly Water Progress</Text>
-      <ProgressBar progress={progress} color="#3498db" style={styles.bar} />
+      <ProgressBar
+        progress={progress}
+        color="#3498db"
+        style={styles.bar}
+        accessibilityRole="progressbar"
+        accessibilityValue={{ now: Math.round(progress * 100), min: 0, max: 100 }}
+      />
       <Text style={styles.text}>
-        {safeConsumed.toFixed(0)} {unit} / {goal} {unit}
+        {formatAmount(displayConsumed, unit)} / {formatAmount(displayGoal, unit)}
       </Text>
     </View>
   );
