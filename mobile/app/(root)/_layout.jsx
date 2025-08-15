@@ -18,9 +18,7 @@ export default function Layout() {
 
             if (route.name === "index") iconName = "home";
             else if (route.name === "create") iconName = "add-circle";
-            else if (route.name === "bikeRides") iconName = "bicycle";
-            else if (route.name === "income") iconName = "cash";
-            else if (route.name === "drinkWater") iconName = focused ? "cafe" : "cafe-outline"; // cup icon
+            
 
             return <Ionicons name={iconName} size={size} color={color} />;
           },
@@ -31,9 +29,6 @@ export default function Layout() {
       >
         <Tabs.Screen name="index" options={{ title: "Home" }} />
         <Tabs.Screen name="create" options={{ title: "Create" }} />
-        <Tabs.Screen name="bikeRides" options={{ title: "Bike Rides" }} />
-        <Tabs.Screen name="income" options={{ title: "Income" }} />
-        <Tabs.Screen name="drinkWater" options={{ title: "Water" }} />
       </Tabs>
     </SafeScreen>
   );
