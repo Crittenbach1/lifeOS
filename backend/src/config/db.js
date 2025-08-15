@@ -5,6 +5,8 @@ export const sql = neon(process.env.DATABASE_URL);
 export async function initDB() {
     console.log("[initDB] starting… NODE_ENV=", process.env.NODE_ENV);
     try {
+        
+
         await sql`
             CREATE TABLE IF NOT EXISTS taskType (
                 id SERIAL PRIMARY KEY,
@@ -34,6 +36,22 @@ export async function initDB() {
         `;
 
 
+        await sql`
+            CREATE TABLE IF NOT EXISTS taskItem (
+                id SERIAL PRIMARY KEY,
+                taskTypeID INTEGER NOT NULL REFERENCES taskType(id) ON DELETE CASCADE,
+                
+                name VARCHAR(255),
+                amount DECIMAL(10, 2),
+                description TEXT,
+                taskCategory VARCHAR(255),
+
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+        `;
+
+        
         console.log("Database initialized successfully");
     } catch (error) {
         console.log("Error initializing DB", error);
