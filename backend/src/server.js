@@ -31,7 +31,7 @@ app.get("/", (req, res) => {
 
 console.log("my port:", process.env.PORT);
 
-app.use("/taskType", taskTypeRoutes);
+app.use("/api/taskType", taskTypeRoutes);
 
 
 initDB().then(() => {
