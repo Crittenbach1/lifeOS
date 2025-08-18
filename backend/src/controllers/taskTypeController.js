@@ -44,6 +44,18 @@ function sanitizeCategories(categories) {
   return out;
 }
 
+// Build a Postgres TEXT[] literal safely for Neon.
+// Returns a chunk like: ARRAY['a','b']::text[] or ARRAY[]::text[]
+function textArrayParam(values) {
+  const cats = sanitizeCategories(values);
+  if (cats.length === 0) {
+    return sql`ARRAY[]::text[]`;
+  }
+  // Quote each element as a separate parameter to avoid injection/escaping issues
+  const quoted = cats.map((v) => sql`${v}`);
+  return sql`ARRAY[${sql.join(quoted, sql`, `)}]::text[]`;
+}
+
 function logAnd500(res, label, error) {
   console.error(label, {
     message: error?.message,
@@ -147,10 +159,8 @@ export async function createTaskType(req, res) {
       }
     }
 
-    const cats = sanitizeCategories(categories);
     const active = is_active === undefined ? true : Boolean(is_active);
 
-    // Neon-safe bindings: JSONB with ::jsonb, TEXT[] with sql.array
     const inserted = await sql`
       INSERT INTO tasktype (
         user_id, name, schedules, priority, trackBy, categories,
@@ -162,7 +172,7 @@ export async function createTaskType(req, res) {
         ${JSON.stringify(schedules)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${sql.array(cats, 'text')},
+        ${textArrayParam(categories)},
         ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
       )
@@ -214,7 +224,7 @@ export async function updateTaskType(req, res) {
     if (typeof trackBy === "string") fields.push(sql`trackBy = ${trackBy.trim()}`);
 
     if (categories !== undefined) {
-      fields.push(sql`categories = ${sql.array(sanitizeCategories(categories), 'text')}`);
+      fields.push(sql`categories = ${textArrayParam(categories)}`);
     }
 
     if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${Number(yearlyGoal)}`);
