@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { initDB } from "./config/db.js";
 import { job } from "./config/cron.js";
+import taskTypeRoutes from "./routes/taskTypeRoutes.js";
 
 
 dotenv.config();
@@ -30,7 +31,7 @@ app.get("/", (req, res) => {
 
 console.log("my port:", process.env.PORT);
 
-
+app.use("/api/taskType", taskTypeRoutes);
 
 
 initDB().then(() => {
