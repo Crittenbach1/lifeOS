@@ -30,7 +30,6 @@ function validateSchedules(schedules) {
 function sanitizeCategories(categories) {
   if (categories == null) return [];
   if (!Array.isArray(categories)) return [];
-  // keep only non-empty strings, trim
   const out = [];
   const seen = new Set();
   for (const c of categories) {
@@ -45,53 +44,57 @@ function sanitizeCategories(categories) {
   return out;
 }
 
+function logAnd500(res, label, error) {
+  console.error(label, {
+    message: error?.message,
+    detail: error?.detail,
+    code: error?.code,
+    stack: error?.stack,
+  });
+  return res
+    .status(500)
+    .json({ message: "Internal server error", detail: error?.detail, code: error?.code });
+}
+
 /** -------------------- Controllers -------------------- **/
 
-// GET /taskType/user/:userId
+// GET /api/taskType/user/:userId
 export async function getTaskTypesByUserId(req, res) {
   try {
     const { userId } = req.params;
-
     const rows = await sql`
       SELECT *
       FROM tasktype
       WHERE user_id = ${userId}
       ORDER BY created_at DESC, id DESC
     `;
-
     res.status(200).json(rows);
   } catch (error) {
-    console.error("Error getting task types", error);
-    res.status(500).json({ message: "Internal server error" });
+    return logAnd500(res, "Error getting task types", error);
   }
 }
 
-// GET /taskType/:id
+// GET /api/taskType/:id
 export async function getTaskTypeById(req, res) {
   try {
     const { id } = req.params;
-
     const rows = await sql`
       SELECT *
       FROM tasktype
       WHERE id = ${id}
       LIMIT 1
     `;
-
     if (rows.length === 0) {
       return res.status(404).json({ message: "taskType not found" });
     }
-
     res.status(200).json(rows[0]);
   } catch (error) {
-    console.error("Error getting task type by id", error);
-    res.status(500).json({ message: "Internal server error" });
+    return logAnd500(res, "Error getting task type by id", error);
   }
 }
 
-// POST /taskType
+// POST /api/taskType
 export async function createTaskType(req, res) {
-    console.log("hi");
   try {
     const {
       user_id,
@@ -104,25 +107,29 @@ export async function createTaskType(req, res) {
       monthlyGoal,
       weeklyGoal,
       dailyGoal,
-      is_active,   // optional, defaults true
+      is_active, // optional, defaults true
     } = req.body;
 
-    // ---- Validation (mirror the client rules) ----
-    if (!user_id) {
-      return res.status(400).json({ message: "user_id is required" });
-    }
+    // ---- Validation (mirror client) ----
+    if (!user_id) return res.status(400).json({ message: "user_id is required" });
+
     if (typeof name !== "string" || name.trim().length < 2) {
       return res.status(400).json({ message: "name must be at least 2 characters" });
     }
+
     const pr = Number(priority ?? 1);
     if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
       return res.status(400).json({ message: "priority must be an integer between 1 and 10" });
     }
+
     if (typeof trackBy !== "string" || trackBy.trim().length === 0) {
       return res.status(400).json({ message: "trackBy is required" });
     }
+
     if (!validateSchedules(schedules)) {
-      return res.status(400).json({ message: "schedules must be non-empty and times in HH:MM 24h format" });
+      return res
+        .status(400)
+        .json({ message: "schedules must be non-empty and times in HH:MM 24h format" });
     }
 
     const yg = Number(yearlyGoal);
@@ -143,32 +150,20 @@ export async function createTaskType(req, res) {
     const cats = sanitizeCategories(categories);
     const active = is_active === undefined ? true : Boolean(is_active);
 
-    // Postgres.js will serialize JS objects to JSONB and arrays to SQL arrays automatically.
+    // Neon-safe bindings: JSONB with ::jsonb, TEXT[] with sql.array
     const inserted = await sql`
       INSERT INTO tasktype (
-        user_id,
-        name,
-        schedules,
-        priority,
-        trackBy,
-        categories,
-        yearlyGoal,
-        monthlyGoal,
-        weeklyGoal,
-        dailyGoal,
-        is_active
+        user_id, name, schedules, priority, trackBy, categories,
+        yearlyGoal, monthlyGoal, weeklyGoal, dailyGoal, is_active
       )
       VALUES (
         ${user_id},
         ${name.trim()},
-        ${sql.json(schedules)},    -- JSONB
+        ${JSON.stringify(schedules)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${cats},                   -- TEXT[]
-        ${yg},
-        ${mg},
-        ${wg},
-        ${dg},
+        ${sql.array(cats, 'text')},
+        ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
       )
       RETURNING *
@@ -176,12 +171,11 @@ export async function createTaskType(req, res) {
 
     res.status(201).json(inserted[0]);
   } catch (error) {
-    console.error("Error creating task type", error);
-    res.status(500).json({ message: "Internal server error" });
+    return logAnd500(res, "Error creating task type", error);
   }
 }
 
-// PATCH /taskType/:id
+// PATCH /api/taskType/:id
 export async function updateTaskType(req, res) {
   try {
     const { id } = req.params;
@@ -198,15 +192,17 @@ export async function updateTaskType(req, res) {
       is_active,
     } = req.body;
 
-    // Build dynamic SET clause
     const fields = [];
+
     if (typeof name === "string") fields.push(sql`name = ${name.trim()}`);
+
     if (schedules !== undefined) {
       if (!validateSchedules(schedules)) {
         return res.status(400).json({ message: "Invalid schedules (use HH:MM 24h times)" });
       }
-      fields.push(sql`schedules = ${sql.json(schedules)}`);
+      fields.push(sql`schedules = ${JSON.stringify(schedules)}::jsonb`);
     }
+
     if (priority !== undefined) {
       const pr = Number(priority);
       if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
@@ -214,12 +210,18 @@ export async function updateTaskType(req, res) {
       }
       fields.push(sql`priority = ${pr}`);
     }
+
     if (typeof trackBy === "string") fields.push(sql`trackBy = ${trackBy.trim()}`);
-    if (categories !== undefined) fields.push(sql`categories = ${sanitizeCategories(categories)}`);
+
+    if (categories !== undefined) {
+      fields.push(sql`categories = ${sql.array(sanitizeCategories(categories), 'text')}`);
+    }
+
     if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${Number(yearlyGoal)}`);
     if (monthlyGoal !== undefined) fields.push(sql`monthlyGoal = ${Number(monthlyGoal)}`);
     if (weeklyGoal !== undefined) fields.push(sql`weeklyGoal = ${Number(weeklyGoal)}`);
     if (dailyGoal !== undefined) fields.push(sql`dailyGoal = ${Number(dailyGoal)}`);
+
     if (is_active !== undefined) fields.push(sql`is_active = ${Boolean(is_active)}`);
 
     if (fields.length === 0) {
@@ -241,12 +243,11 @@ export async function updateTaskType(req, res) {
 
     res.status(200).json(updated[0]);
   } catch (error) {
-    console.error("Error updating task type", error);
-    res.status(500).json({ message: "Internal server error" });
+    return logAnd500(res, "Error updating task type", error);
   }
 }
 
-// DELETE /taskType/:id
+// DELETE /api/taskType/:id
 export async function deleteTaskType(req, res) {
   try {
     const { id } = req.params;
@@ -263,7 +264,6 @@ export async function deleteTaskType(req, res) {
 
     res.status(200).json({ message: "taskType deleted successfully" });
   } catch (error) {
-    console.error("Error deleting task type", error);
-    res.status(500).json({ message: "Internal server error" });
+    return logAnd500(res, "Error deleting task type", error);
   }
 }
