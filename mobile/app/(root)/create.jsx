@@ -217,6 +217,7 @@ const CreateScreen = () => {
 
     setIsLoading(true);
     try {
+      console.log("hi from create page try")
       const payload = {
         user_id: user?.id,
         name: validated.name,
