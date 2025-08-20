@@ -12,7 +12,6 @@ export async function initDB() {
                 id SERIAL PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL,
                 name VARCHAR(255) NOT NULL, -- e.g. "Gym", "Drink Water"
-                timezone VARCHAR(100) NOT NULL DEFAULT 'UTC',
                 
                 -- Array of objects: [{ "dayOfWeek": 1, "times": ["07:30", "18:00"] }]
                 schedules JSONB NOT NULL,

@@ -12,16 +12,17 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SignOutButton } from "@/components/SignOutButton";
 import PageLoader from "../../components/PageLoader";
+import TaskCard from "../../components/TaskCard";
 import { styles } from "../../assets/styles/home.styles";
 
 
 export default function Page() {
 
   return (
-    <ScrollView style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.content}>
-
+           <TaskCard />
       </View>
-    </ScrollView>
+    </View>
   );
 }
