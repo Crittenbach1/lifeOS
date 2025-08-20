@@ -1,10 +1,11 @@
 // controllers/taskItemController.js
-import sql from "../config/db.js";
+// Uses named import for `sql` and an inline error helper (Option A).
 
-// --- Built-in error logger/helper ---
+import { sql } from "../config/db.js";
+
+// Inline error helper to avoid external utils dependency.
 function logAnd500(res, message, error) {
   console.error(message, error);
-  // avoid leaking internal details in prod
   return res.status(500).json({ message });
 }
 
@@ -15,7 +16,6 @@ function logAnd500(res, message, error) {
 export async function getTaskItemsByTaskType(req, res) {
   try {
     const { taskTypeID } = req.params;
-
     if (!taskTypeID) {
       return res.status(400).json({ message: "taskTypeID is required" });
     }
@@ -39,7 +39,6 @@ export async function getTaskItemsByTaskType(req, res) {
 export async function getTaskItemById(req, res) {
   try {
     const { id } = req.params;
-
     if (!id) {
       return res.status(400).json({ message: "id is required" });
     }
@@ -72,6 +71,7 @@ export async function createTaskItem(req, res) {
       return res.status(400).json({ message: "taskTypeID is required" });
     }
 
+    // Coerce amount -> number or null (DECIMAL column accepts null)
     const amt =
       amount === undefined || amount === null || amount === ""
         ? null
@@ -85,7 +85,13 @@ export async function createTaskItem(req, res) {
 
     const inserted = await sql`
       INSERT INTO taskitem (tasktypeid, name, amount, description, taskcategory)
-      VALUES (${taskTypeID}, ${cleanName}, ${amt}, ${description ?? null}, ${taskCategory ?? null})
+      VALUES (
+        ${taskTypeID},
+        ${cleanName},
+        ${amt},
+        ${description ?? null},
+        ${taskCategory ?? null}
+      )
       RETURNING *
     `;
 
@@ -102,7 +108,6 @@ export async function createTaskItem(req, res) {
 export async function deleteTaskItem(req, res) {
   try {
     const { id } = req.params;
-
     if (!id) {
       return res.status(400).json({ message: "id is required" });
     }
@@ -112,6 +117,7 @@ export async function deleteTaskItem(req, res) {
       WHERE id = ${id}
       RETURNING *
     `;
+
     if (result.length === 0) {
       return res.status(404).json({ message: "taskItem not found" });
     }
