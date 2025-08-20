@@ -34,7 +34,7 @@ export async function getTaskItemById(req, res) {
 }
 
 // POST /api/taskItem
-export async function createTaskType(req, res) {
+export async function createTaskItem(req, res) {
   try {
     const {
       user_id,
