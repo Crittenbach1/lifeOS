@@ -1,6 +1,12 @@
 // controllers/taskItemController.js
 import sql from "../config/db.js";
-import { logAnd500 } from "../utils/errors.js";
+
+// --- Built-in error logger/helper ---
+function logAnd500(res, message, error) {
+  console.error(message, error);
+  // avoid leaking internal details in prod
+  return res.status(500).json({ message });
+}
 
 /**
  * GET /api/taskItem/type/:taskTypeID
@@ -10,7 +16,6 @@ export async function getTaskItemsByTaskType(req, res) {
   try {
     const { taskTypeID } = req.params;
 
-    // basic guard (not strictly required; sql tag parameterizes)
     if (!taskTypeID) {
       return res.status(400).json({ message: "taskTypeID is required" });
     }
@@ -63,17 +68,14 @@ export async function createTaskItem(req, res) {
   try {
     const { taskTypeID, name, amount, description, taskCategory } = req.body;
 
-    // Validation
     if (!taskTypeID) {
       return res.status(400).json({ message: "taskTypeID is required" });
     }
 
-    // Coerce amount -> number or null (DECIMAL column accepts null)
     const amt =
       amount === undefined || amount === null || amount === ""
         ? null
         : Number(amount);
-
     if (amt !== null && Number.isNaN(amt)) {
       return res.status(400).json({ message: "amount must be numeric or null" });
     }
@@ -83,13 +85,7 @@ export async function createTaskItem(req, res) {
 
     const inserted = await sql`
       INSERT INTO taskitem (tasktypeid, name, amount, description, taskcategory)
-      VALUES (
-        ${taskTypeID},
-        ${cleanName},
-        ${amt},
-        ${description ?? null},
-        ${taskCategory ?? null}
-      )
+      VALUES (${taskTypeID}, ${cleanName}, ${amt}, ${description ?? null}, ${taskCategory ?? null})
       RETURNING *
     `;
 
@@ -116,12 +112,10 @@ export async function deleteTaskItem(req, res) {
       WHERE id = ${id}
       RETURNING *
     `;
-
     if (result.length === 0) {
       return res.status(404).json({ message: "taskItem not found" });
     }
 
-    // 200 with message, or 204 with no body—keeping 200 for clarity
     return res.status(200).json({ message: "taskItem deleted successfully" });
   } catch (error) {
     return logAnd500(res, "Error deleting task item", error);
