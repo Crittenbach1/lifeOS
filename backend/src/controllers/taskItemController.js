@@ -1,79 +1,118 @@
-// GET /api/taskItem/user/:userId
-export async function getTaskItemsByUserId(req, res) {
+// controllers/taskItemController.js
+import sql from "../config/db.js";
+import { logAnd500 } from "../utils/errors.js";
+
+/**
+ * GET /api/taskItem/type/:taskTypeID
+ * List taskItems for a given taskTypeID (most recent first)
+ */
+export async function getTaskItemsByTaskType(req, res) {
   try {
-    const { userId } = req.params;
+    const { taskTypeID } = req.params;
+
+    // basic guard (not strictly required; sql tag parameterizes)
+    if (!taskTypeID) {
+      return res.status(400).json({ message: "taskTypeID is required" });
+    }
+
     const rows = await sql`
       SELECT *
       FROM taskitem
-      WHERE user_id = ${userId}
+      WHERE tasktypeid = ${taskTypeID}
       ORDER BY created_at DESC, id DESC
     `;
-    res.status(200).json(rows);
+    return res.status(200).json(rows);
   } catch (error) {
     return logAnd500(res, "Error getting task items", error);
   }
 }
 
-// GET /api/taskItem/:id
+/**
+ * GET /api/taskItem/:id
+ * Fetch a single taskItem by id
+ */
 export async function getTaskItemById(req, res) {
   try {
     const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: "id is required" });
+    }
+
     const rows = await sql`
       SELECT *
-      FROM tasktype
+      FROM taskitem
       WHERE id = ${id}
       LIMIT 1
     `;
     if (rows.length === 0) {
       return res.status(404).json({ message: "taskItem not found" });
     }
-    res.status(200).json(rows[0]);
+    return res.status(200).json(rows[0]);
   } catch (error) {
-    return logAnd500(res, "Error getting task type by id", error);
+    return logAnd500(res, "Error getting task item by id", error);
   }
 }
 
-// POST /api/taskItem
+/**
+ * POST /api/taskItem
+ * Create a taskItem
+ * Body: { taskTypeID (required), name?, amount?, description?, taskCategory? }
+ */
 export async function createTaskItem(req, res) {
   try {
-    const {
-      user_id,
-      name,
-      amount,
-      description,
-      taskCategory,
-    } = req.body;
+    const { taskTypeID, name, amount, description, taskCategory } = req.body;
 
-    // ---- Validation (mirror client) ----
-    if (!user_id) return res.status(400).json({ message: "user_id is required" });
+    // Validation
+    if (!taskTypeID) {
+      return res.status(400).json({ message: "taskTypeID is required" });
+    }
+
+    // Coerce amount -> number or null (DECIMAL column accepts null)
+    const amt =
+      amount === undefined || amount === null || amount === ""
+        ? null
+        : Number(amount);
+
+    if (amt !== null && Number.isNaN(amt)) {
+      return res.status(400).json({ message: "amount must be numeric or null" });
+    }
+
+    const cleanName =
+      typeof name === "string" && name.trim().length ? name.trim() : null;
 
     const inserted = await sql`
-      INSERT INTO taskItem (
-        user_id, name, amount, description, taskCategory
-      )
+      INSERT INTO taskitem (tasktypeid, name, amount, description, taskcategory)
       VALUES (
-        ${user_id},
-        ${name.trim()},
-        ${amount},
-        ${description},
-        ${taskCategory},
+        ${taskTypeID},
+        ${cleanName},
+        ${amt},
+        ${description ?? null},
+        ${taskCategory ?? null}
       )
       RETURNING *
     `;
 
-    res.status(201).json(inserted[0]);
+    return res.status(201).json(inserted[0]);
   } catch (error) {
     return logAnd500(res, "Error creating task item", error);
   }
 }
 
-// DELETE /api/taskType/:id
+/**
+ * DELETE /api/taskItem/:id
+ * Delete a taskItem by id
+ */
 export async function deleteTaskItem(req, res) {
   try {
     const { id } = req.params;
 
+    if (!id) {
+      return res.status(400).json({ message: "id is required" });
+    }
+
     const result = await sql`
-      DELETE FROM tasktype
+      DELETE FROM taskitem
       WHERE id = ${id}
       RETURNING *
     `;
@@ -82,7 +121,8 @@ export async function deleteTaskItem(req, res) {
       return res.status(404).json({ message: "taskItem not found" });
     }
 
-    res.status(200).json({ message: "taskItem deleted successfully" });
+    // 200 with message, or 204 with no body—keeping 200 for clarity
+    return res.status(200).json({ message: "taskItem deleted successfully" });
   } catch (error) {
     return logAnd500(res, "Error deleting task item", error);
   }

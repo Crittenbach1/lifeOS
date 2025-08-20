@@ -207,33 +207,58 @@ export default function TaskCard() {
     return null;
   }, [taskTypes, now, completedToday]);
 
+  // Lookup helper
+  const getTaskTypeById = useCallback(
+    (id: number) => taskTypes.find((t) => t.id === id),
+    [taskTypes]
+  );
+
+  // --- Create a taskItem on completion ---
   const handleComplete = useCallback(async () => {
     if (!current) return;
     setBusy(true);
 
-    // Advance UI immediately
+    // Optimistic UI: mark this (taskTypeID + hhmm) as done locally
     const key = `${current.taskTypeID}-${current.hhmm}`;
     setCompletedToday((prev) => ({ ...prev, [key]: true }));
 
     try {
-      // Optional: log completion (if/when your route exists)
+      const tt = getTaskTypeById(current.taskTypeID);
       const base = API_URL.replace(/\/$/, "");
+
+      const payload = {
+        taskTypeID: current.taskTypeID,                               // required by your API
+        name: tt?.name ?? current.taskName ?? null,                   // optional
+        amount: null,                                                 // optional
+        description: `Completed at ${formatTime(new Date())} (${current.hhmm})`, // optional
+        taskCategory: tt?.categories?.[0] ?? null,                    // optional
+      };
+
       const res = await fetch(`${base}/taskItem`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskTypeID: current.taskTypeID }),
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload),
       });
+
       if (!res.ok) {
+        // Roll back optimistic update on failure
+        setCompletedToday((prev) => {
+          const copy = { ...prev };
+          delete copy[key];
+          return copy;
+        });
         const body = await res.text();
         throw new Error(`HTTP ${res.status} – ${body || "No body"}`);
       }
+
+      // const created = await res.json(); // if you want the row
     } catch (e: any) {
-      console.warn("Complete failed (kept local):", e?.message);
-      Alert.alert("Saved locally", "Server completion isn’t set up yet.");
+      console.warn("Create taskItem failed:", e?.message);
+      Alert.alert("Save failed", e?.message ?? "Could not create task item.");
     } finally {
       setBusy(false);
     }
-  }, [current]);
+  }, [current, getTaskTypeById]);
 
   // ---------- UI ----------
   if (!isLoaded || loading) {
