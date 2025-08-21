@@ -1,4 +1,3 @@
-// backend/src/controllers/taskTypeController.js
 import { sql } from "../config/db.js";
 
 /** -------------------- Helpers -------------------- **/
@@ -6,6 +5,10 @@ import { sql } from "../config/db.js";
 // "HH:MM" 24-hour, 00..23 : 00..59
 const HHMM_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
+/**
+ * Your original strict validator: schedules must be a non-empty array
+ * with valid dayOfWeek and HH:MM times. (Unchanged.)
+ */
 function validateSchedules(schedules) {
   if (!Array.isArray(schedules) || schedules.length === 0) return false;
   for (const entry of schedules) {
@@ -27,14 +30,34 @@ function validateSchedules(schedules) {
   return true;
 }
 
-function sanitizeCategories(categories) {
-  if (categories == null) return [];
-  if (!Array.isArray(categories)) return [];
+/**
+ * Accept categories as:
+ * - array: ["A","B","C"]  ✅
+ * - comma string: "A, B, C" ✅
+ * - JSON string: '["A","B","C"]' ✅
+ * Dedupes (case-insensitive), trims, and drops empties.
+ */
+function coerceCategories(input) {
+  if (input == null) return [];
+  let arr = [];
+  if (Array.isArray(input)) {
+    arr = input;
+  } else if (typeof input === "string") {
+    try {
+      const j = JSON.parse(input);
+      if (Array.isArray(j)) arr = j;
+      else arr = String(input).split(",");
+    } catch {
+      arr = String(input).split(",");
+    }
+  } else {
+    return [];
+  }
+
   const out = [];
   const seen = new Set();
-  for (const c of categories) {
-    if (typeof c !== "string") continue;
-    const v = c.trim();
+  for (const c of arr) {
+    const v = String(c).trim();
     if (!v) continue;
     const key = v.toLowerCase();
     if (seen.has(key)) continue;
@@ -42,18 +65,6 @@ function sanitizeCategories(categories) {
     out.push(v);
   }
   return out;
-}
-
-// Build a Postgres TEXT[] literal safely for Neon.
-// Returns a chunk like: ARRAY['a','b']::text[] or ARRAY[]::text[]
-function textArrayParam(values) {
-  const cats = sanitizeCategories(values);
-  if (cats.length === 0) {
-    return sql`ARRAY[]::text[]`;
-  }
-  // Quote each element as a separate parameter to avoid injection/escaping issues
-  const quoted = cats.map((v) => sql`${v}`);
-  return sql`ARRAY[${sql.join(quoted, sql`, `)}]::text[]`;
 }
 
 function logAnd500(res, label, error) {
@@ -113,16 +124,16 @@ export async function createTaskType(req, res) {
       name,
       schedules,
       priority,
-      trackBy,
-      categories, // optional
+      trackBy,              // you said trackby is fine; keep your existing usage
+      categories,           // TEXT[]
       yearlyGoal,
       monthlyGoal,
       weeklyGoal,
       dailyGoal,
-      is_active, // optional, defaults true
-    } = req.body;
+      is_active,
+    } = req.body ?? {};
 
-    // ---- Validation (mirror client) ----
+    // ---- Validation (unchanged except categories handling) ----
     if (!user_id) return res.status(400).json({ message: "user_id is required" });
 
     if (typeof name !== "string" || name.trim().length < 2) {
@@ -161,9 +172,12 @@ export async function createTaskType(req, res) {
 
     const active = is_active === undefined ? true : Boolean(is_active);
 
+    // 🔑 NEW: robust TEXT[] binding for Neon
+    const cats = coerceCategories(categories);
+
     const inserted = await sql`
       INSERT INTO tasktype (
-        user_id, name, schedules, priority, trackBy, categories,
+        user_id, name, schedules, priority, trackby, categories,
         yearlyGoal, monthlyGoal, weeklyGoal, dailyGoal, is_active
       )
       VALUES (
@@ -172,7 +186,7 @@ export async function createTaskType(req, res) {
         ${JSON.stringify(schedules)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${textArrayParam(categories)},
+        ${cats.length ? sql`${sql.array(cats)}::text[]` : sql`ARRAY[]::text[]`},
         ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
       )
@@ -200,7 +214,7 @@ export async function updateTaskType(req, res) {
       weeklyGoal,
       dailyGoal,
       is_active,
-    } = req.body;
+    } = req.body ?? {};
 
     const fields = [];
 
@@ -221,10 +235,16 @@ export async function updateTaskType(req, res) {
       fields.push(sql`priority = ${pr}`);
     }
 
-    if (typeof trackBy === "string") fields.push(sql`trackBy = ${trackBy.trim()}`);
+    if (typeof trackBy === "string") fields.push(sql`trackby = ${trackBy.trim()}`);
 
+    // 🔑 NEW: robust TEXT[] binding for Neon
     if (categories !== undefined) {
-      fields.push(sql`categories = ${textArrayParam(categories)}`);
+      const cats = coerceCategories(categories);
+      fields.push(
+        cats.length
+          ? sql`categories = ${sql.array(cats)}::text[]`
+          : sql`categories = ARRAY[]::text[]`
+      );
     }
 
     if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${Number(yearlyGoal)}`);
