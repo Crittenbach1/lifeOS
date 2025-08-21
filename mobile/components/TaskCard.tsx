@@ -24,7 +24,8 @@ type TaskTypeRow = {
   trackby?: string;                // some backends send lowercase
   trackBy?: string;                // DB column (folds to lowercase)
   categories?: string[];
-  defaultAmount?: number | null;   // <-- used to show a fixed amount
+  defaultAmount?: number | null;   // support both casings
+  defaultamount?: number | null;
   yearlyGoal: number;
   monthlyGoal: number;
   weeklyGoal: number;
@@ -83,7 +84,7 @@ export default function TaskCard() {
   const [busy, setBusy] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  const [amount, setAmount] = useState(""); // used only when there's no defaultAmount
+  const [amount, setAmount] = useState(""); // used only when there's no default amount
   const [description, setDescription] = useState("");
 
   // Completed keys for *today*: `${taskTypeID}-${hhmm}` (scheduled-only marker)
@@ -122,7 +123,6 @@ export default function TaskCard() {
     throw new Error(errors.join(" | "));
   }, [user?.id]);
 
-  // Fetch today's completions for a single taskTypeID
   const fetchTaskItemsForTypeToday = useCallback(async (taskTypeID: number) => {
     const base = API_URL.replace(/\/$/, "");
     const res = await fetch(`${base}/taskItem/type/${encodeURIComponent(taskTypeID)}`, {
@@ -142,7 +142,6 @@ export default function TaskCard() {
     return countToday;
   }, []);
 
-  // DB-backed completedToday map (only scheduled slots)
   const hydrateCompletedFromDB = useCallback(
     async (rows: TaskTypeRow[]) => {
       const active = rows.filter((t) => t.is_active);
@@ -182,12 +181,10 @@ export default function TaskCard() {
     [fetchTaskItemsForTypeToday]
   );
 
-  // Merge/initialize category indices so each taskType keeps its own rotation
   const mergeCategoryIndices = useCallback((rows: TaskTypeRow[]) => {
     setCategoryIndexByType((prev) => {
       const next: Record<number, number> = { ...prev };
       for (const r of rows) if (next[r.id] == null) next[r.id] = 0;
-      // prune missing ids
       for (const idStr of Object.keys(next)) {
         const id = Number(idStr);
         if (!rows.find((r) => r.id === id)) delete next[id];
@@ -230,12 +227,8 @@ export default function TaskCard() {
     }
   }, [fetchTaskTypes, hydrateCompletedFromDB, user?.id, mergeCategoryIndices]);
 
-  // Initial load
-  useEffect(() => {
-    if (isLoaded) load();
-  }, [isLoaded, load]);
+  useEffect(() => { if (isLoaded) load(); }, [isLoaded, load]);
 
-  // Minute tick
   useEffect(() => {
     function armMinute() {
       if (minuteTimer.current) clearTimeout(minuteTimer.current);
@@ -248,7 +241,6 @@ export default function TaskCard() {
     return () => { if (minuteTimer.current) clearTimeout(minuteTimer.current); };
   }, []);
 
-  // Midnight reset
   useEffect(() => {
     function armMidnight() {
       if (midnightTimer.current) clearTimeout(midnightTimer.current);
@@ -263,7 +255,7 @@ export default function TaskCard() {
     return () => { if (midnightTimer.current) clearTimeout(midnightTimer.current); };
   }, [load]);
 
-  // --- Build scheduled "current" entry (preemption) ---
+  // --- Build scheduled "current" entry ---
   const currentScheduled: QueueEntry | null = useMemo(() => {
     const day = new Date().getDay();
     const entries: QueueEntry[] = [];
@@ -286,7 +278,7 @@ export default function TaskCard() {
     const released = entries.filter((e) => e.scheduledAt.getTime() <= now.getTime());
 
     released.sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority; // 1 wins
+      if (a.priority !== b.priority) return a.priority - b.priority;
       const t = a.scheduledAt.getTime() - b.scheduledAt.getTime();
       if (t !== 0) return t;
       if (a.taskTypeID !== b.taskTypeID) return a.taskTypeID - b.taskTypeID;
@@ -300,7 +292,7 @@ export default function TaskCard() {
     return null;
   }, [taskTypes, now, completedToday]);
 
-  // --- Unscheduled fallback list (no schedule required) ---
+  // --- Unscheduled fallback list ---
   const unscheduledList = useMemo(() => {
     const isUnscheduled = (tt: TaskTypeRow) => {
       const scheds = tt?.schedules ?? [];
@@ -313,7 +305,6 @@ export default function TaskCard() {
       .sort((a, b) => (a.priority - b.priority) || (a.id - b.id));
   }, [taskTypes]);
 
-  // Keep index in range when list length changes
   useEffect(() => {
     if (!unscheduledList.length) setUnschedIdx(0);
     else setUnschedIdx((prev) => prev % unscheduledList.length);
@@ -329,18 +320,18 @@ export default function TaskCard() {
     [taskTypes]
   );
 
-  // Helpers to read current trackBy / default amount
   const getTrackBy = useCallback((tt?: TaskTypeRow | null) => {
     return tt?.trackby ?? tt?.trackBy ?? "";
   }, []);
 
+  // *** FIX HERE: do NOT coerce null to 0 ***
   const getDefaultAmount = useCallback((tt?: TaskTypeRow | null): number | null => {
-    const v = tt?.defaultAmount;
-    const n = Number(v);
+    const raw = (tt as any)?.defaultAmount ?? (tt as any)?.defaultamount;
+    if (raw === null || raw === undefined) return null; // keep "unset" as null
+    const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   }, []);
 
-  // Current category for a taskType (if any)
   const getCurrentCategory = useCallback(
     (tt: TaskTypeRow | null | undefined): string | null => {
       const list = tt?.categories ?? [];
@@ -351,7 +342,6 @@ export default function TaskCard() {
     [categoryIndexByType]
   );
 
-  // Advance a taskType's category pointer (wrap-around)
   const incrementCategory = useCallback(
     (taskTypeID: number) => {
       setCategoryIndexByType((prev) => {
@@ -405,7 +395,7 @@ export default function TaskCard() {
         }
 
         setCompletedToday((prev) => ({ ...prev, [key]: true }));
-        incrementCategory(currentScheduled.taskTypeID); // auto-advance category
+        incrementCategory(currentScheduled.taskTypeID);
         setAmount("");
         setDescription("");
       } else if (currentUnscheduled) {
@@ -432,8 +422,8 @@ export default function TaskCard() {
           throw new Error(`HTTP ${res.status} – ${body || "No body"}`);
         }
 
-        incrementCategory(tt.id);   // auto-advance category
-        rotateUnscheduled();        // move to next unscheduled task
+        incrementCategory(tt.id);
+        rotateUnscheduled();
       }
     } catch (e: any) {
       Alert.alert("Save failed", e?.message ?? "Could not create task item.");
@@ -469,7 +459,6 @@ export default function TaskCard() {
     );
   }
 
-  // Determine the currently visible taskType + trackBy + default amount
   const activeTT: TaskTypeRow | undefined = (() => {
     if (currentScheduled) return getTaskTypeById(currentScheduled.taskTypeID);
     if (currentUnscheduled) return currentUnscheduled;
@@ -481,11 +470,8 @@ export default function TaskCard() {
 
   const showingScheduled = !!currentScheduled;
   const showingUnscheduled = !currentScheduled && !!currentUnscheduled;
-  const currentCategoryLabel = showingScheduled
-    ? getCurrentCategory(activeTT)
-    : getCurrentCategory(activeTT);
+  const currentCategoryLabel = getCurrentCategory(activeTT);
 
-  // Reusable amount UI: show read-only default if present, else input
   const AmountBlock = (
     <>
       {defaultAmt != null ? (
@@ -559,18 +545,11 @@ export default function TaskCard() {
 
             {AmountBlock}
 
-            {/* Description */}
             <TextInput
               placeholder="Add a description…"
               value={description}
               onChangeText={setDescription}
-              style={{
-                marginTop: 8,
-                borderWidth: 1,
-                borderColor: "#ddd",
-                borderRadius: 8,
-                padding: 8,
-              }}
+              style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
             />
 
             <TouchableOpacity
@@ -607,18 +586,11 @@ export default function TaskCard() {
 
             {AmountBlock}
 
-            {/* Description */}
             <TextInput
               placeholder="Add a description…"
               value={description}
               onChangeText={setDescription}
-              style={{
-                marginTop: 8,
-                borderWidth: 1,
-                borderColor: "#ddd",
-                borderRadius: 8,
-                padding: 8,
-              }}
+              style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
             />
 
             <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>

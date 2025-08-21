@@ -6,9 +6,11 @@ import { sql } from "../config/db.js";
 // "HH:MM" 24-hour, 00..23 : 00..59
 const HHMM_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
-// Your original strict schedules validator (non-empty)
+// Allow [] to mean "unscheduled"
 function validateSchedules(schedules) {
-  if (!Array.isArray(schedules) || schedules.length === 0) return false;
+  if (schedules == null) return true;                           // treat missing as unscheduled
+  if (!Array.isArray(schedules)) return false;
+  if (schedules.length === 0) return true;                      // unscheduled OK
   for (const entry of schedules) {
     if (
       typeof entry !== "object" ||
@@ -16,11 +18,11 @@ function validateSchedules(schedules) {
       typeof entry.dayOfWeek !== "number" ||
       entry.dayOfWeek < 0 ||
       entry.dayOfWeek > 6 ||
-      !Array.isArray(entry.times) ||
-      entry.times.length === 0
+      !Array.isArray(entry.times)
     ) {
       return false;
     }
+    // if the day is present, we can allow [] times (means no releases that day)
     for (const t of entry.times) {
       if (typeof t !== "string" || !HHMM_RE.test(t)) return false;
     }
@@ -28,27 +30,14 @@ function validateSchedules(schedules) {
   return true;
 }
 
-// categories: accept array, "a,b,c", or JSON string
-function coerceCategories(input) {
-  if (input == null) return [];
-  let arr = [];
-  if (Array.isArray(input)) {
-    arr = input;
-  } else if (typeof input === "string") {
-    try {
-      const j = JSON.parse(input);
-      if (Array.isArray(j)) arr = j;
-      else arr = String(input).split(",");
-    } catch {
-      arr = String(input).split(",");
-    }
-  } else {
-    return [];
-  }
+function sanitizeCategories(categories) {
+  if (categories == null) return [];
+  if (!Array.isArray(categories)) return [];
   const out = [];
   const seen = new Set();
-  for (const c of arr) {
-    const v = String(c).trim();
+  for (const c of categories) {
+    if (typeof c !== "string") continue;
+    const v = c.trim();
     if (!v) continue;
     const key = v.toLowerCase();
     if (seen.has(key)) continue;
@@ -58,12 +47,26 @@ function coerceCategories(input) {
   return out;
 }
 
-function parseDefaultAmount(val) {
-  if (val === undefined) return undefined;    // not provided -> no change
-  if (val === null || val === "") return null; // explicit null/empty -> NULL
-  const n = Number(val);
-  if (!Number.isFinite(n)) throw new Error("defaultAmount must be a number");
-  return n;
+// Build a Postgres TEXT[] literal safely for Neon.
+function textArrayParam(values) {
+  const cats = sanitizeCategories(values);
+  if (cats.length === 0) {
+    return sql`ARRAY[]::text[]`;
+  }
+  const quoted = cats.map((v) => sql`${v}`);
+  return sql`ARRAY[${sql.join(quoted, sql`, `)}]::text[]`;
+}
+
+function coerceNonNegativeInt(value, fallback = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.trunc(n);
+}
+
+function coerceNullableNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function logAnd500(res, label, error) {
@@ -121,66 +124,65 @@ export async function createTaskType(req, res) {
     const {
       user_id,
       name,
-      schedules,
+      schedules,        // [] allowed for unscheduled
       priority,
       trackBy,
-      categories,
-      defaultAmount,   // NEW
+      categories,       // optional
+      defaultAmount,    // optional, nullable
       yearlyGoal,
       monthlyGoal,
       weeklyGoal,
       dailyGoal,
       is_active,
-    } = req.body ?? {};
+    } = req.body;
 
+    // ---- Validation ----
     if (!user_id) return res.status(400).json({ message: "user_id is required" });
-    if (typeof name !== "string" || name.trim().length < 2)
+
+    if (typeof name !== "string" || name.trim().length < 2) {
       return res.status(400).json({ message: "name must be at least 2 characters" });
-
-    const pr = Number(priority ?? 1);
-    if (!Number.isFinite(pr) || pr < 1 || pr > 10)
-      return res.status(400).json({ message: "priority must be an integer between 1 and 10" });
-
-    if (typeof trackBy !== "string" || trackBy.trim().length === 0)
-      return res.status(400).json({ message: "trackBy is required" });
-
-    if (!validateSchedules(schedules))
-      return res.status(400).json({ message: "schedules must be non-empty and HH:MM 24h format" });
-
-    const yg = Number(yearlyGoal);
-    const mg = Number(monthlyGoal);
-    const wg = Number(weeklyGoal);
-    const dg = Number(dailyGoal);
-    for (const [label, n] of [
-      ["yearlyGoal", yg],
-      ["monthlyGoal", mg],
-      ["weeklyGoal", wg],
-      ["dailyGoal", dg],
-    ]) {
-      if (!Number.isFinite(n) || n <= 0) {
-        return res.status(400).json({ message: `${label} must be a number greater than 0` });
-      }
     }
 
-    const active = is_active === undefined ? true : Boolean(is_active);
+    const pr = Number(priority ?? 1);
+    if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
+      return res.status(400).json({ message: "priority must be an integer between 1 and 10" });
+    }
 
-    const cats = coerceCategories(categories);
-    const da = parseDefaultAmount(defaultAmount); // number | null | undefined
+    if (typeof trackBy !== "string" || trackBy.trim().length === 0) {
+      return res.status(400).json({ message: "trackBy is required" });
+    }
+
+    if (!validateSchedules(schedules)) {
+      return res
+        .status(400)
+        .json({ message: "Invalid schedules (use HH:MM 24h times or leave empty for unscheduled)" });
+    }
+
+    // Goals: allow >= 0
+    const yg = coerceNonNegativeInt(yearlyGoal, 0);
+    const mg = coerceNonNegativeInt(monthlyGoal, 0);
+    const wg = coerceNonNegativeInt(weeklyGoal, 0);
+    const dg = coerceNonNegativeInt(dailyGoal, 0);
+
+    const active = is_active === undefined ? true : Boolean(is_active);
+    const schedJson = Array.isArray(schedules) ? schedules : [];
+
+    const defAmt = coerceNullableNumber(defaultAmount);
 
     const inserted = await sql`
       INSERT INTO tasktype (
-        user_id, name, schedules, priority, trackby, categories,
-        defaultAmount,                                     -- NEW
+        user_id, name, schedules, priority, trackBy, categories,
+        defaultAmount,                      -- NEW
         yearlyGoal, monthlyGoal, weeklyGoal, dailyGoal, is_active
       )
       VALUES (
         ${user_id},
         ${name.trim()},
-        ${JSON.stringify(schedules)}::jsonb,
+        ${JSON.stringify(schedJson)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${cats.length ? sql`${sql.array(cats)}::text[]` : sql`ARRAY[]::text[]`},
-        ${da ?? null},                                      -- driver handles numeric/null
+        ${textArrayParam(categories)},
+        ${defAmt},
         ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
       )
@@ -189,9 +191,6 @@ export async function createTaskType(req, res) {
 
     res.status(201).json(inserted[0]);
   } catch (error) {
-    if (error?.message?.includes("defaultAmount")) {
-      return res.status(400).json({ message: error.message });
-    }
     return logAnd500(res, "Error creating task type", error);
   }
 }
@@ -206,13 +205,13 @@ export async function updateTaskType(req, res) {
       priority,
       trackBy,
       categories,
-      defaultAmount,   // NEW
+      defaultAmount,
       yearlyGoal,
       monthlyGoal,
       weeklyGoal,
       dailyGoal,
       is_active,
-    } = req.body ?? {};
+    } = req.body;
 
     const fields = [];
 
@@ -220,9 +219,12 @@ export async function updateTaskType(req, res) {
 
     if (schedules !== undefined) {
       if (!validateSchedules(schedules)) {
-        return res.status(400).json({ message: "Invalid schedules (use HH:MM 24h times)" });
+        return res.status(400).json({
+          message: "Invalid schedules (use HH:MM 24h times or leave empty for unscheduled)",
+        });
       }
-      fields.push(sql`schedules = ${JSON.stringify(schedules)}::jsonb`);
+      const schedJson = Array.isArray(schedules) ? schedules : [];
+      fields.push(sql`schedules = ${JSON.stringify(schedJson)}::jsonb`);
     }
 
     if (priority !== undefined) {
@@ -233,26 +235,20 @@ export async function updateTaskType(req, res) {
       fields.push(sql`priority = ${pr}`);
     }
 
-    if (typeof trackBy === "string") fields.push(sql`trackby = ${trackBy.trim()}`);
+    if (typeof trackBy === "string") fields.push(sql`trackBy = ${trackBy.trim()}`);
 
     if (categories !== undefined) {
-      const cats = coerceCategories(categories);
-      fields.push(
-        cats.length
-          ? sql`categories = ${sql.array(cats)}::text[]`
-          : sql`categories = ARRAY[]::text[]`
-      );
+      fields.push(sql`categories = ${textArrayParam(categories)}`);
     }
 
     if (defaultAmount !== undefined) {
-      const da = parseDefaultAmount(defaultAmount); // number|null
-      fields.push(sql`defaultAmount = ${da}`);
+      fields.push(sql`defaultAmount = ${coerceNullableNumber(defaultAmount)}`);
     }
 
-    if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${Number(yearlyGoal)}`);
-    if (monthlyGoal !== undefined) fields.push(sql`monthlyGoal = ${Number(monthlyGoal)}`);
-    if (weeklyGoal !== undefined) fields.push(sql`weeklyGoal = ${Number(weeklyGoal)}`);
-    if (dailyGoal !== undefined) fields.push(sql`dailyGoal = ${Number(dailyGoal)}`);
+    if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${coerceNonNegativeInt(yearlyGoal, 0)}`);
+    if (monthlyGoal !== undefined) fields.push(sql`monthlyGoal = ${coerceNonNegativeInt(monthlyGoal, 0)}`);
+    if (weeklyGoal !== undefined) fields.push(sql`weeklyGoal = ${coerceNonNegativeInt(weeklyGoal, 0)}`);
+    if (dailyGoal !== undefined) fields.push(sql`dailyGoal = ${coerceNonNegativeInt(dailyGoal, 0)}`);
 
     if (is_active !== undefined) fields.push(sql`is_active = ${Boolean(is_active)}`);
 
@@ -275,9 +271,6 @@ export async function updateTaskType(req, res) {
 
     res.status(200).json(updated[0]);
   } catch (error) {
-    if (error?.message?.includes("defaultAmount")) {
-      return res.status(400).json({ message: error.message });
-    }
     return logAnd500(res, "Error updating task type", error);
   }
 }
