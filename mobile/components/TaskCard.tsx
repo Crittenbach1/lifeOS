@@ -24,6 +24,7 @@ type TaskTypeRow = {
   trackby?: string;                // some backends send lowercase
   trackBy?: string;                // DB column (folds to lowercase)
   categories?: string[];
+  defaultAmount?: number | null;   // <-- used to show a fixed amount
   yearlyGoal: number;
   monthlyGoal: number;
   weeklyGoal: number;
@@ -82,7 +83,7 @@ export default function TaskCard() {
   const [busy, setBusy] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(""); // used only when there's no defaultAmount
   const [description, setDescription] = useState("");
 
   // Completed keys for *today*: `${taskTypeID}-${hhmm}` (scheduled-only marker)
@@ -328,6 +329,17 @@ export default function TaskCard() {
     [taskTypes]
   );
 
+  // Helpers to read current trackBy / default amount
+  const getTrackBy = useCallback((tt?: TaskTypeRow | null) => {
+    return tt?.trackby ?? tt?.trackBy ?? "";
+  }, []);
+
+  const getDefaultAmount = useCallback((tt?: TaskTypeRow | null): number | null => {
+    const v = tt?.defaultAmount;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }, []);
+
   // Current category for a taskType (if any)
   const getCurrentCategory = useCallback(
     (tt: TaskTypeRow | null | undefined): string | null => {
@@ -360,7 +372,7 @@ export default function TaskCard() {
     setDescription("");
   }, [unscheduledList.length]);
 
-  // Save completion (scheduled OR unscheduled), including active category
+  // Save completion (scheduled OR unscheduled), using defaultAmount if present
   const handleComplete = useCallback(async () => {
     setBusy(true);
     try {
@@ -370,11 +382,13 @@ export default function TaskCard() {
         const tt = getTaskTypeById(currentScheduled.taskTypeID);
         const key = `${currentScheduled.taskTypeID}-${currentScheduled.hhmm}`;
         const chosenCategory = getCurrentCategory(tt);
+        const def = getDefaultAmount(tt);
+        const amt = def != null ? def : (amount ? Number(amount) : null);
 
         const payload = {
           taskTypeID: currentScheduled.taskTypeID,
           name: tt?.name ?? currentScheduled.taskName ?? null,
-          amount: amount ? Number(amount) : null,
+          amount: amt,
           description:
             description || `Completed at ${formatTime(new Date())} (${currentScheduled.hhmm})`,
           taskCategory: chosenCategory ?? null,
@@ -397,11 +411,13 @@ export default function TaskCard() {
       } else if (currentUnscheduled) {
         const tt = currentUnscheduled;
         const chosenCategory = getCurrentCategory(tt);
+        const def = getDefaultAmount(tt);
+        const amt = def != null ? def : (amount ? Number(amount) : null);
 
         const payload = {
           taskTypeID: tt.id,
           name: tt.name,
-          amount: amount ? Number(amount) : null,
+          amount: amt,
           description: description || "Completed (unscheduled loop)",
           taskCategory: chosenCategory ?? null,
         };
@@ -431,6 +447,7 @@ export default function TaskCard() {
     description,
     getTaskTypeById,
     getCurrentCategory,
+    getDefaultAmount,
     incrementCategory,
     rotateUnscheduled,
   ]);
@@ -452,21 +469,51 @@ export default function TaskCard() {
     );
   }
 
-  const currentTrackBy = (() => {
-    if (currentScheduled) {
-      const tt = getTaskTypeById(currentScheduled.taskTypeID);
-      return tt?.trackby ?? tt?.trackBy ?? "";
-    } else if (currentUnscheduled) {
-      return currentUnscheduled.trackby ?? currentUnscheduled.trackBy ?? "";
-    }
-    return "";
+  // Determine the currently visible taskType + trackBy + default amount
+  const activeTT: TaskTypeRow | undefined = (() => {
+    if (currentScheduled) return getTaskTypeById(currentScheduled.taskTypeID);
+    if (currentUnscheduled) return currentUnscheduled;
+    return undefined;
   })();
+
+  const currentTrackBy = getTrackBy(activeTT);
+  const defaultAmt = getDefaultAmount(activeTT);
 
   const showingScheduled = !!currentScheduled;
   const showingUnscheduled = !currentScheduled && !!currentUnscheduled;
   const currentCategoryLabel = showingScheduled
-    ? getCurrentCategory(getTaskTypeById(currentScheduled!.taskTypeID))
-    : getCurrentCategory(currentUnscheduled);
+    ? getCurrentCategory(activeTT)
+    : getCurrentCategory(activeTT);
+
+  // Reusable amount UI: show read-only default if present, else input
+  const AmountBlock = (
+    <>
+      {defaultAmt != null ? (
+        <View style={{ flexDirection: "row", alignItems: "baseline", marginTop: 12, gap: 6 }}>
+          <Text style={{ fontWeight: "800", fontSize: 18 }}>{defaultAmt}</Text>
+          <Text>{currentTrackBy || "amount"}</Text>
+        </View>
+      ) : (
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
+          <TextInput
+            placeholder="0"
+            keyboardType="numeric"
+            value={amount}
+            onChangeText={setAmount}
+            style={{
+              flex: 1,
+              borderWidth: 1,
+              borderColor: "#ddd",
+              borderRadius: 8,
+              padding: 8,
+              marginRight: 6,
+            }}
+          />
+          <Text>{currentTrackBy || "amount"}</Text>
+        </View>
+      )}
+    </>
+  );
 
   return (
     <ScrollView
@@ -510,24 +557,7 @@ export default function TaskCard() {
               <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
             ) : null}
 
-            {/* Amount */}
-            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
-              <TextInput
-                placeholder="0"
-                keyboardType="numeric"
-                value={amount}
-                onChangeText={setAmount}
-                style={{
-                  flex: 1,
-                  borderWidth: 1,
-                  borderColor: "#ddd",
-                  borderRadius: 8,
-                  padding: 8,
-                  marginRight: 6,
-                }}
-              />
-              <Text>{currentTrackBy || "amount"}</Text>
-            </View>
+            {AmountBlock}
 
             {/* Description */}
             <TextInput
@@ -566,32 +596,16 @@ export default function TaskCard() {
         ) : showingUnscheduled && currentUnscheduled ? (
           <>
             <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentUnscheduled.name}</Text>
-            <Text style={{ opacity: 0.65, marginTop: 4 }}>
-              Priority {currentUnscheduled.priority} · #
-              {unscheduledList.length ? (unschedIdx % unscheduledList.length) + 1 : 0} of {unscheduledList.length}
-            </Text>
+            {unscheduledList.length ? (
+              <Text style={{ opacity: 0.65, marginTop: 4 }}>
+                #{(unschedIdx % unscheduledList.length) + 1} of {unscheduledList.length}
+              </Text>
+            ) : null}
             {currentCategoryLabel ? (
               <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
             ) : null}
 
-            {/* Amount */}
-            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
-              <TextInput
-                placeholder="0"
-                keyboardType="numeric"
-                value={amount}
-                onChangeText={setAmount}
-                style={{
-                  flex: 1,
-                  borderWidth: 1,
-                  borderColor: "#ddd",
-                  borderRadius: 8,
-                  padding: 8,
-                  marginRight: 6,
-                }}
-              />
-              <Text>{currentTrackBy || "amount"}</Text>
-            </View>
+            {AmountBlock}
 
             {/* Description */}
             <TextInput
