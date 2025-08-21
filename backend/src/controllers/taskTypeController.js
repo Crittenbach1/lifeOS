@@ -5,10 +5,7 @@ import { sql } from "../config/db.js";
 // "HH:MM" 24-hour, 00..23 : 00..59
 const HHMM_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
-/**
- * Original strict validator: schedules must be a non-empty array
- * with valid dayOfWeek and HH:MM times.
- */
+// Your original strict validator (schedules must be non-empty & valid)
 function validateSchedules(schedules) {
   if (!Array.isArray(schedules) || schedules.length === 0) return false;
   for (const entry of schedules) {
@@ -68,15 +65,22 @@ function coerceCategories(input) {
 }
 
 /**
- * Build a TEXT[] literal safely:
- *  - ARRAY['a','b']::text[] (elements are bound as parameters)
- *  - or ARRAY[]::text[] when empty
+ * Build a TEXT[] expression without sql.join / sql.array:
+ * - If values is undefined -> NULL (so COALESCE can keep old value)
+ * - Else -> ARRAY(SELECT jsonb_array_elements_text($1::jsonb))
  */
-function textArraySql(values) {
+function categoriesArrayExprOrNull(values) {
+  if (values === undefined) return sql`NULL`;
   const cats = coerceCategories(values);
-  if (cats.length === 0) return sql`ARRAY[]::text[]`;
-  const elems = cats.map((v) => sql`${v}`);
-  return sql`ARRAY[${sql.join(elems, sql`, `)}]::text[]`;
+  const json = JSON.stringify(cats);
+  return sql`COALESCE(ARRAY(SELECT jsonb_array_elements_text(${json}::jsonb)), ARRAY[]::text[])`;
+}
+
+// Non-NULL variant for INSERT (always returns a text[])
+function categoriesArrayExpr(values) {
+  const cats = coerceCategories(values);
+  const json = JSON.stringify(cats);
+  return sql`COALESCE(ARRAY(SELECT jsonb_array_elements_text(${json}::jsonb)), ARRAY[]::text[])`;
 }
 
 function logAnd500(res, label, error) {
@@ -136,8 +140,8 @@ export async function createTaskType(req, res) {
       name,
       schedules,
       priority,
-      trackBy,              // unchanged; you said this is fine
-      categories,           // TEXT[] (array/comma string/JSON string)
+      trackBy,              // you said trackBy/trackby is fine on your side
+      categories,           // array / comma string / JSON string
       yearlyGoal,
       monthlyGoal,
       weeklyGoal,
@@ -145,7 +149,7 @@ export async function createTaskType(req, res) {
       is_active,
     } = req.body ?? {};
 
-    // ---- Validation (unchanged except categories handling) ----
+    // ---- Validation (unchanged, schedules still required) ----
     if (!user_id) return res.status(400).json({ message: "user_id is required" });
 
     if (typeof name !== "string" || name.trim().length < 2) {
@@ -195,7 +199,7 @@ export async function createTaskType(req, res) {
         ${JSON.stringify(schedules)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${textArraySql(categories)},  -- 👈 safe TEXT[] builder, no sql.array
+        ${categoriesArrayExpr(categories)},
         ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
       )
@@ -225,47 +229,65 @@ export async function updateTaskType(req, res) {
       is_active,
     } = req.body ?? {};
 
-    const fields = [];
+    // If nothing is provided, bail early
+    const hasAny =
+      name !== undefined ||
+      schedules !== undefined ||
+      priority !== undefined ||
+      trackBy !== undefined ||
+      categories !== undefined ||
+      yearlyGoal !== undefined ||
+      monthlyGoal !== undefined ||
+      weeklyGoal !== undefined ||
+      dailyGoal !== undefined ||
+      is_active !== undefined;
 
-    if (typeof name === "string") fields.push(sql`name = ${name.trim()}`);
+    if (!hasAny) {
+      return res.status(400).json({ message: "No fields to update" });
+    }
 
+    // Validate inputs that are present
     if (schedules !== undefined) {
       if (!validateSchedules(schedules)) {
         return res.status(400).json({ message: "Invalid schedules (use HH:MM 24h times)" });
       }
-      fields.push(sql`schedules = ${JSON.stringify(schedules)}::jsonb`);
     }
-
     if (priority !== undefined) {
       const pr = Number(priority);
       if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
         return res.status(400).json({ message: "priority must be 1..10" });
       }
-      fields.push(sql`priority = ${pr}`);
+    }
+    if (trackBy !== undefined && (typeof trackBy !== "string" || !trackBy.trim())) {
+      return res.status(400).json({ message: "trackBy must be a non-empty string" });
     }
 
-    if (typeof trackBy === "string") fields.push(sql`trackby = ${trackBy.trim()}`);
-
-    if (categories !== undefined) {
-      fields.push(sql`categories = ${textArraySql(categories)}`); // 👈 safe TEXT[] update
-    }
-
-    if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${Number(yearlyGoal)}`);
-    if (monthlyGoal !== undefined) fields.push(sql`monthlyGoal = ${Number(monthlyGoal)}`);
-    if (weeklyGoal !== undefined) fields.push(sql`weeklyGoal = ${Number(weeklyGoal)}`);
-    if (dailyGoal !== undefined) fields.push(sql`dailyGoal = ${Number(dailyGoal)}`);
-
-    if (is_active !== undefined) fields.push(sql`is_active = ${Boolean(is_active)}`);
-
-    if (fields.length === 0) {
-      return res.status(400).json({ message: "No fields to update" });
-    }
-
-    fields.push(sql`updated_at = NOW()`);
+    // Build per-field expressions without using sql.join
+    const nameExpr       = name       !== undefined ? sql`${name.trim()}` : sql`NULL`;
+    const schedExpr      = schedules  !== undefined ? sql`${JSON.stringify(schedules)}::jsonb` : sql`NULL`;
+    const prExpr         = priority   !== undefined ? sql`${Number(priority)}` : sql`NULL`;
+    const trackByExpr    = trackBy    !== undefined ? sql`${trackBy.trim()}` : sql`NULL`;
+    const catsExpr       = categoriesArrayExprOrNull(categories);
+    const ygExpr         = yearlyGoal !== undefined ? sql`${Number(yearlyGoal)}` : sql`NULL`;
+    const mgExpr         = monthlyGoal!== undefined ? sql`${Number(monthlyGoal)}` : sql`NULL`;
+    const wgExpr         = weeklyGoal !== undefined ? sql`${Number(weeklyGoal)}` : sql`NULL`;
+    const dgExpr         = dailyGoal  !== undefined ? sql`${Number(dailyGoal)}` : sql`NULL`;
+    const activeExpr     = is_active  !== undefined ? sql`${Boolean(is_active)}` : sql`NULL`;
 
     const updated = await sql`
       UPDATE tasktype
-      SET ${sql.join(fields, sql`, `)}
+      SET
+        name        = COALESCE(${nameExpr}, name),
+        schedules   = COALESCE(${schedExpr}, schedules),
+        priority    = COALESCE(${prExpr}, priority),
+        trackby     = COALESCE(${trackByExpr}, trackby),
+        categories  = COALESCE(${catsExpr}, categories),
+        yearlyGoal  = COALESCE(${ygExpr}, yearlyGoal),
+        monthlyGoal = COALESCE(${mgExpr}, monthlyGoal),
+        weeklyGoal  = COALESCE(${wgExpr}, weeklyGoal),
+        dailyGoal   = COALESCE(${dgExpr}, dailyGoal),
+        is_active   = COALESCE(${activeExpr}, is_active),
+        updated_at  = NOW()
       WHERE id = ${id}
       RETURNING *
     `;
