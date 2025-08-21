@@ -5,9 +5,15 @@ import { sql } from "../config/db.js";
 // "HH:MM" 24-hour, 00..23 : 00..59
 const HHMM_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
-// Your original strict validator (schedules must be non-empty & valid)
-function validateSchedules(schedules) {
-  if (!Array.isArray(schedules) || schedules.length === 0) return false;
+/**
+ * Loose validator:
+ *  - undefined or []  -> OK (means "unscheduled")
+ *  - otherwise must be an array of { dayOfWeek: 0..6, times: ["HH:MM", ...] }
+ */
+function validateSchedulesLoose(schedules) {
+  if (schedules == null) return true;               // allow missing
+  if (!Array.isArray(schedules)) return false;
+  if (schedules.length === 0) return true;          // allow empty array
   for (const entry of schedules) {
     if (
       typeof entry !== "object" ||
@@ -15,11 +21,11 @@ function validateSchedules(schedules) {
       typeof entry.dayOfWeek !== "number" ||
       entry.dayOfWeek < 0 ||
       entry.dayOfWeek > 6 ||
-      !Array.isArray(entry.times) ||
-      entry.times.length === 0
+      !Array.isArray(entry.times)
     ) {
       return false;
     }
+    // allow empty times[] for "present but no times"
     for (const t of entry.times) {
       if (typeof t !== "string" || !HHMM_RE.test(t)) return false;
     }
@@ -28,11 +34,7 @@ function validateSchedules(schedules) {
 }
 
 /**
- * Accept categories as:
- *  - array: ["A","B","C"]
- *  - comma string: "A, B, C"
- *  - JSON string: '["A","B","C"]'
- * Dedupes (case-insensitive), trims, and drops empties.
+ * Categories coercion: array | "A, B" | '["A","B"]'
  */
 function coerceCategories(input) {
   if (input == null) return [];
@@ -42,15 +44,13 @@ function coerceCategories(input) {
   } else if (typeof input === "string") {
     try {
       const j = JSON.parse(input);
-      if (Array.isArray(j)) arr = j;
-      else arr = String(input).split(",");
+      arr = Array.isArray(j) ? j : String(input).split(",");
     } catch {
       arr = String(input).split(",");
     }
   } else {
     return [];
   }
-
   const out = [];
   const seen = new Set();
   for (const c of arr) {
@@ -65,19 +65,15 @@ function coerceCategories(input) {
 }
 
 /**
- * Build a TEXT[] expression without sql.join / sql.array:
- * - If values is undefined -> NULL (so COALESCE can keep old value)
- * - Else -> ARRAY(SELECT jsonb_array_elements_text($1::jsonb))
+ * Build TEXT[] without sql.array/sql.join, using JSONB → TEXT[] on the server.
  */
-function categoriesArrayExprOrNull(values) {
-  if (values === undefined) return sql`NULL`;
+function categoriesArrayExpr(values) {
   const cats = coerceCategories(values);
   const json = JSON.stringify(cats);
   return sql`COALESCE(ARRAY(SELECT jsonb_array_elements_text(${json}::jsonb)), ARRAY[]::text[])`;
 }
-
-// Non-NULL variant for INSERT (always returns a text[])
-function categoriesArrayExpr(values) {
+function categoriesArrayExprOrNull(values) {
+  if (values === undefined) return sql`NULL`; // means "don't change it" on UPDATE
   const cats = coerceCategories(values);
   const json = JSON.stringify(cats);
   return sql`COALESCE(ARRAY(SELECT jsonb_array_elements_text(${json}::jsonb)), ARRAY[]::text[])`;
@@ -123,9 +119,7 @@ export async function getTaskTypeById(req, res) {
       WHERE id = ${id}
       LIMIT 1
     `;
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "taskType not found" });
-    }
+    if (rows.length === 0) return res.status(404).json({ message: "taskType not found" });
     res.status(200).json(rows[0]);
   } catch (error) {
     return logAnd500(res, "Error getting task type by id", error);
@@ -138,10 +132,10 @@ export async function createTaskType(req, res) {
     const {
       user_id,
       name,
-      schedules,
+      schedules,     // now optional
       priority,
-      trackBy,              // you said trackBy/trackby is fine on your side
-      categories,           // array / comma string / JSON string
+      trackBy,
+      categories,
       yearlyGoal,
       monthlyGoal,
       weeklyGoal,
@@ -149,7 +143,6 @@ export async function createTaskType(req, res) {
       is_active,
     } = req.body ?? {};
 
-    // ---- Validation (unchanged, schedules still required) ----
     if (!user_id) return res.status(400).json({ message: "user_id is required" });
 
     if (typeof name !== "string" || name.trim().length < 2) {
@@ -165,11 +158,11 @@ export async function createTaskType(req, res) {
       return res.status(400).json({ message: "trackBy is required" });
     }
 
-    if (!validateSchedules(schedules)) {
-      return res
-        .status(400)
-        .json({ message: "schedules must be non-empty and times in HH:MM 24h format" });
+    // ✅ Allow missing/empty schedules
+    if (!validateSchedulesLoose(schedules)) {
+      return res.status(400).json({ message: "Invalid schedules format (use HH:MM 24h times)" });
     }
+    const schedulesSafe = Array.isArray(schedules) ? schedules : []; // store [] when missing
 
     const yg = Number(yearlyGoal);
     const mg = Number(monthlyGoal);
@@ -196,7 +189,7 @@ export async function createTaskType(req, res) {
       VALUES (
         ${user_id},
         ${name.trim()},
-        ${JSON.stringify(schedules)}::jsonb,
+        ${JSON.stringify(schedulesSafe)}::jsonb,
         ${pr},
         ${trackBy.trim()},
         ${categoriesArrayExpr(categories)},
@@ -218,7 +211,7 @@ export async function updateTaskType(req, res) {
     const { id } = req.params;
     const {
       name,
-      schedules,
+      schedules, // allow null/[] to explicitly clear
       priority,
       trackBy,
       categories,
@@ -229,7 +222,6 @@ export async function updateTaskType(req, res) {
       is_active,
     } = req.body ?? {};
 
-    // If nothing is provided, bail early
     const hasAny =
       name !== undefined ||
       schedules !== undefined ||
@@ -242,29 +234,28 @@ export async function updateTaskType(req, res) {
       dailyGoal !== undefined ||
       is_active !== undefined;
 
-    if (!hasAny) {
-      return res.status(400).json({ message: "No fields to update" });
+    if (!hasAny) return res.status(400).json({ message: "No fields to update" });
+
+    if (schedules !== undefined && !validateSchedulesLoose(schedules)) {
+      return res.status(400).json({ message: "Invalid schedules (use HH:MM 24h times)" });
     }
 
-    // Validate inputs that are present
-    if (schedules !== undefined) {
-      if (!validateSchedules(schedules)) {
-        return res.status(400).json({ message: "Invalid schedules (use HH:MM 24h times)" });
-      }
-    }
     if (priority !== undefined) {
       const pr = Number(priority);
       if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
         return res.status(400).json({ message: "priority must be 1..10" });
       }
     }
+
     if (trackBy !== undefined && (typeof trackBy !== "string" || !trackBy.trim())) {
       return res.status(400).json({ message: "trackBy must be a non-empty string" });
     }
 
-    // Build per-field expressions without using sql.join
+    // Prepare expressions (no sql.join needed)
     const nameExpr       = name       !== undefined ? sql`${name.trim()}` : sql`NULL`;
-    const schedExpr      = schedules  !== undefined ? sql`${JSON.stringify(schedules)}::jsonb` : sql`NULL`;
+    const schedExpr      = schedules  !== undefined
+      ? sql`${JSON.stringify(Array.isArray(schedules) ? schedules : [])}::jsonb`
+      : sql`NULL`;
     const prExpr         = priority   !== undefined ? sql`${Number(priority)}` : sql`NULL`;
     const trackByExpr    = trackBy    !== undefined ? sql`${trackBy.trim()}` : sql`NULL`;
     const catsExpr       = categoriesArrayExprOrNull(categories);
@@ -292,10 +283,7 @@ export async function updateTaskType(req, res) {
       RETURNING *
     `;
 
-    if (updated.length === 0) {
-      return res.status(404).json({ message: "taskType not found" });
-    }
-
+    if (updated.length === 0) return res.status(404).json({ message: "taskType not found" });
     res.status(200).json(updated[0]);
   } catch (error) {
     return logAnd500(res, "Error updating task type", error);
@@ -306,17 +294,8 @@ export async function updateTaskType(req, res) {
 export async function deleteTaskType(req, res) {
   try {
     const { id } = req.params;
-
-    const result = await sql`
-      DELETE FROM tasktype
-      WHERE id = ${id}
-      RETURNING *
-    `;
-
-    if (result.length === 0) {
-      return res.status(404).json({ message: "taskType not found" });
-    }
-
+    const result = await sql`DELETE FROM tasktype WHERE id = ${id} RETURNING *`;
+    if (result.length === 0) return res.status(404).json({ message: "taskType not found" });
     res.status(200).json({ message: "taskType deleted successfully" });
   } catch (error) {
     return logAnd500(res, "Error deleting task type", error);

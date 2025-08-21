@@ -270,7 +270,7 @@ export default function TaskCard() {
     for (const tt of taskTypes) {
       if (!tt.is_active) continue;
       const sched = (tt.schedules ?? []).find((s) => Number(s.dayOfWeek) === day);
-      const times = sched?.times ?? [];
+      const times = (sched?.times ?? []);
       for (const hhmm of times) {
         entries.push({
           taskTypeID: tt.id,
@@ -304,7 +304,6 @@ export default function TaskCard() {
     const isUnscheduled = (tt: TaskTypeRow) => {
       const scheds = tt?.schedules ?? [];
       if (scheds.length === 0) return true;
-      // treat empty-times objects as unscheduled
       return scheds.every((s) => !s?.times || s.times.length === 0);
     };
 
@@ -361,14 +360,6 @@ export default function TaskCard() {
     setDescription("");
   }, [unscheduledList.length]);
 
-  // Optional: advance category without completing (useful for testing)
-  const advanceCategoryOnly = useCallback(() => {
-    if (currentScheduled) incrementCategory(currentScheduled.taskTypeID);
-    else if (currentUnscheduled) incrementCategory(currentUnscheduled.id);
-    setAmount("");
-    setDescription("");
-  }, [currentScheduled, currentUnscheduled, incrementCategory]);
-
   // Save completion (scheduled OR unscheduled), including active category
   const handleComplete = useCallback(async () => {
     setBusy(true);
@@ -400,7 +391,7 @@ export default function TaskCard() {
         }
 
         setCompletedToday((prev) => ({ ...prev, [key]: true }));
-        incrementCategory(currentScheduled.taskTypeID);
+        incrementCategory(currentScheduled.taskTypeID); // auto-advance category
         setAmount("");
         setDescription("");
       } else if (currentUnscheduled) {
@@ -425,8 +416,8 @@ export default function TaskCard() {
           throw new Error(`HTTP ${res.status} – ${body || "No body"}`);
         }
 
-        incrementCategory(tt.id);
-        rotateUnscheduled();
+        incrementCategory(tt.id);   // auto-advance category
+        rotateUnscheduled();        // move to next unscheduled task
       }
     } catch (e: any) {
       Alert.alert("Save failed", e?.message ?? "Could not create task item.");
@@ -552,43 +543,25 @@ export default function TaskCard() {
               }}
             />
 
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-              <TouchableOpacity
-                onPress={handleComplete}
-                disabled={busy}
-                style={{
-                  flexGrow: 1,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: busy ? "#e5e7eb" : "#111827",
-                  flexDirection: "row",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
-                <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={advanceCategoryOnly}
-                disabled={busy}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: "#f3f4f6",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Ionicons name="shuffle-outline" size={18} />
-                <Text style={{ fontWeight: "700" }}>Next Category</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              onPress={handleComplete}
+              disabled={busy}
+              style={{
+                alignSelf: "stretch",
+                marginTop: 12,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 999,
+                backgroundColor: busy ? "#e5e7eb" : "#111827",
+                flexDirection: "row",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
+              <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
+            </TouchableOpacity>
           </>
         ) : showingUnscheduled && currentUnscheduled ? (
           <>
@@ -652,23 +625,6 @@ export default function TaskCard() {
               >
                 {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
                 <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={advanceCategoryOnly}
-                disabled={busy}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: "#f3f4f6",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Ionicons name="shuffle-outline" size={18} />
-                <Text style={{ fontWeight: "700" }}>Next Category</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
