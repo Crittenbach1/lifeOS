@@ -19,11 +19,11 @@ type TaskTypeRow = {
   id: number;
   user_id: string;
   name: string;
-  schedules: Schedule[];           // may be []
+  schedules?: Schedule[];          // may be undefined or []
   priority: number;                // 1 = highest
   trackby?: string;                // some backends send lowercase
   trackBy?: string;                // DB column (folds to lowercase)
-  categories: string[];
+  categories?: string[];
   yearlyGoal: number;
   monthlyGoal: number;
   weeklyGoal: number;
@@ -85,7 +85,7 @@ export default function TaskCard() {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
 
-  // Completed keys for *today*: `${taskTypeID}-${hhmm}`
+  // Completed keys for *today*: `${taskTypeID}-${hhmm}` (scheduled-only marker)
   const [completedToday, setCompletedToday] = useState<Record<string, boolean>>({});
 
   // Unscheduled loop index
@@ -160,8 +160,8 @@ export default function TaskCard() {
       const completedMap: Record<string, boolean> = {};
 
       for (const tt of active) {
-        const sched = (tt.schedules || []).find((s) => Number(s.dayOfWeek) === day);
-        const times = (sched?.times || []).slice().sort((a, b) => {
+        const sched = (tt.schedules ?? []).find((s) => Number(s.dayOfWeek) === day);
+        const times = (sched?.times ?? []).slice().sort((a, b) => {
           const [ah, am] = a.split(":").map((n) => parseInt(n, 10));
           const [bh, bm] = b.split(":").map((n) => parseInt(n, 10));
           return ah === bh ? am - bm : ah - bh;
@@ -181,14 +181,12 @@ export default function TaskCard() {
     [fetchTaskItemsForTypeToday]
   );
 
-  // Keep/merge category indices across loads so each taskType keeps its own rotation
+  // Merge/initialize category indices so each taskType keeps its own rotation
   const mergeCategoryIndices = useCallback((rows: TaskTypeRow[]) => {
     setCategoryIndexByType((prev) => {
       const next: Record<number, number> = { ...prev };
-      for (const r of rows) {
-        if (next[r.id] == null) next[r.id] = 0;
-      }
-      // Clean out ids no longer present
+      for (const r of rows) if (next[r.id] == null) next[r.id] = 0;
+      // prune missing ids
       for (const idStr of Object.keys(next)) {
         const id = Number(idStr);
         if (!rows.find((r) => r.id === id)) delete next[id];
@@ -246,9 +244,7 @@ export default function TaskCard() {
       }, msUntilNextMinute());
     }
     armMinute();
-    return () => {
-      if (minuteTimer.current) clearTimeout(minuteTimer.current);
-    };
+    return () => { if (minuteTimer.current) clearTimeout(minuteTimer.current); };
   }, []);
 
   // Midnight reset
@@ -263,9 +259,7 @@ export default function TaskCard() {
       }, msUntilTomorrow());
     }
     armMidnight();
-    return () => {
-      if (midnightTimer.current) clearTimeout(midnightTimer.current);
-    };
+    return () => { if (midnightTimer.current) clearTimeout(midnightTimer.current); };
   }, [load]);
 
   // --- Build scheduled "current" entry (preemption) ---
@@ -275,8 +269,8 @@ export default function TaskCard() {
 
     for (const tt of taskTypes) {
       if (!tt.is_active) continue;
-      const sched = (tt.schedules || []).find((s) => Number(s.dayOfWeek) === day);
-      const times = sched?.times || [];
+      const sched = (tt.schedules ?? []).find((s) => Number(s.dayOfWeek) === day);
+      const times = sched?.times ?? [];
       for (const hhmm of times) {
         entries.push({
           taskTypeID: tt.id,
@@ -305,12 +299,14 @@ export default function TaskCard() {
     return null;
   }, [taskTypes, now, completedToday]);
 
-  // --- Unscheduled fallback list (active + no/empty schedules), sorted by priority then id ---
+  // --- Unscheduled fallback list (no schedule required) ---
   const unscheduledList = useMemo(() => {
-    const isUnscheduled = (tt: TaskTypeRow) =>
-      !tt?.schedules ||
-      tt.schedules.length === 0 ||
-      tt.schedules.every((s) => !s?.times || s.times.length === 0);
+    const isUnscheduled = (tt: TaskTypeRow) => {
+      const scheds = tt?.schedules ?? [];
+      if (scheds.length === 0) return true;
+      // treat empty-times objects as unscheduled
+      return scheds.every((s) => !s?.times || s.times.length === 0);
+    };
 
     return taskTypes
       .filter((tt) => tt.is_active && isUnscheduled(tt))
@@ -319,11 +315,8 @@ export default function TaskCard() {
 
   // Keep index in range when list length changes
   useEffect(() => {
-    if (!unscheduledList.length) {
-      setUnschedIdx(0);
-    } else {
-      setUnschedIdx((prev) => prev % unscheduledList.length);
-    }
+    if (!unscheduledList.length) setUnschedIdx(0);
+    else setUnschedIdx((prev) => prev % unscheduledList.length);
   }, [unscheduledList.length]);
 
   const currentUnscheduled = useMemo(() => {
@@ -339,9 +332,10 @@ export default function TaskCard() {
   // Current category for a taskType (if any)
   const getCurrentCategory = useCallback(
     (tt: TaskTypeRow | null | undefined): string | null => {
-      if (!tt || !tt.categories || tt.categories.length === 0) return null;
-      const idx = categoryIndexByType[tt.id] ?? 0;
-      return tt.categories[idx % tt.categories.length] ?? null;
+      const list = tt?.categories ?? [];
+      if (!list.length) return null;
+      const idx = categoryIndexByType[tt!.id] ?? 0;
+      return list[idx % list.length] ?? null;
     },
     [categoryIndexByType]
   );
@@ -351,9 +345,10 @@ export default function TaskCard() {
     (taskTypeID: number) => {
       setCategoryIndexByType((prev) => {
         const tt = getTaskTypeById(taskTypeID);
-        if (!tt || !tt.categories || tt.categories.length === 0) return prev;
+        const list = tt?.categories ?? [];
+        if (!list.length) return prev;
         const cur = prev[taskTypeID] ?? 0;
-        return { ...prev, [taskTypeID]: (cur + 1) % tt.categories.length };
+        return { ...prev, [taskTypeID]: (cur + 1) % list.length };
       });
     },
     [getTaskTypeById]
@@ -368,11 +363,8 @@ export default function TaskCard() {
 
   // Optional: advance category without completing (useful for testing)
   const advanceCategoryOnly = useCallback(() => {
-    if (currentScheduled) {
-      incrementCategory(currentScheduled.taskTypeID);
-    } else if (currentUnscheduled) {
-      incrementCategory(currentUnscheduled.id);
-    }
+    if (currentScheduled) incrementCategory(currentScheduled.taskTypeID);
+    else if (currentUnscheduled) incrementCategory(currentUnscheduled.id);
     setAmount("");
     setDescription("");
   }, [currentScheduled, currentUnscheduled, incrementCategory]);
@@ -408,7 +400,7 @@ export default function TaskCard() {
         }
 
         setCompletedToday((prev) => ({ ...prev, [key]: true }));
-        incrementCategory(currentScheduled.taskTypeID); // advance category for this task type
+        incrementCategory(currentScheduled.taskTypeID);
         setAmount("");
         setDescription("");
       } else if (currentUnscheduled) {
