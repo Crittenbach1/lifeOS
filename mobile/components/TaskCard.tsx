@@ -324,10 +324,10 @@ export default function TaskCard() {
     return tt?.trackby ?? tt?.trackBy ?? "";
   }, []);
 
-  // *** FIX HERE: do NOT coerce null to 0 ***
+  // Keep nulls as null; don't coerce to 0
   const getDefaultAmount = useCallback((tt?: TaskTypeRow | null): number | null => {
     const raw = (tt as any)?.defaultAmount ?? (tt as any)?.defaultamount;
-    if (raw === null || raw === undefined) return null; // keep "unset" as null
+    if (raw === null || raw === undefined) return null;
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   }, []);
@@ -442,6 +442,18 @@ export default function TaskCard() {
     rotateUnscheduled,
   ]);
 
+  // --- Skip handling (scheduled: suppress for today; unscheduled: move to next) ---
+  const handleSkip = useCallback(() => {
+    if (currentScheduled) {
+      const key = `${currentScheduled.taskTypeID}-${currentScheduled.hhmm}`;
+      setCompletedToday((prev) => ({ ...prev, [key]: true }));
+      setAmount("");
+      setDescription("");
+    } else if (currentUnscheduled) {
+      rotateUnscheduled();
+    }
+  }, [currentScheduled, currentUnscheduled, rotateUnscheduled]);
+
   // ---------- UI ----------
   if (!isLoaded || loading) {
     return (
@@ -552,25 +564,43 @@ export default function TaskCard() {
               style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
             />
 
-            <TouchableOpacity
-              onPress={handleComplete}
-              disabled={busy}
-              style={{
-                alignSelf: "stretch",
-                marginTop: 12,
-                paddingHorizontal: 16,
-                paddingVertical: 10,
-                borderRadius: 999,
-                backgroundColor: busy ? "#e5e7eb" : "#111827",
-                flexDirection: "row",
-                justifyContent: "center",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
-              <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+              <TouchableOpacity
+                onPress={handleComplete}
+                disabled={busy}
+                style={{
+                  flexGrow: 1,
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 999,
+                  backgroundColor: busy ? "#e5e7eb" : "#111827",
+                  flexDirection: "row",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
+                <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleSkip}
+                disabled={busy}
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 999,
+                  backgroundColor: "#fef3c7",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <Ionicons name="play-skip-forward-outline" size={18} />
+                <Text style={{ fontWeight: "700" }}>Skip</Text>
+              </TouchableOpacity>
+            </View>
           </>
         ) : showingUnscheduled && currentUnscheduled ? (
           <>
@@ -614,20 +644,20 @@ export default function TaskCard() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => rotateUnscheduled()}
+                onPress={handleSkip}
                 disabled={busy || !unscheduledList.length}
                 style={{
                   paddingHorizontal: 16,
                   paddingVertical: 10,
                   borderRadius: 999,
-                  backgroundColor: "#eef2ff",
+                  backgroundColor: "#fef3c7",
                   flexDirection: "row",
                   alignItems: "center",
                   gap: 8,
                 }}
               >
                 <Ionicons name="play-skip-forward-outline" size={18} />
-                <Text style={{ fontWeight: "700" }}>Next Task</Text>
+                <Text style={{ fontWeight: "700" }}>Skip</Text>
               </TouchableOpacity>
             </View>
           </>

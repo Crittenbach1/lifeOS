@@ -127,3 +127,38 @@ export async function deleteTaskItem(req, res) {
     return logAnd500(res, "Error deleting task item", error);
   }
 }
+
+/**
+ * GET /api/taskItem/today/:userId?tz=America/New_York
+ * Returns all task items the user completed "today" in the given timezone.
+ * We infer user -> task items by joining through tasktype.user_id.
+ *
+ * Notes:
+ * - Assumes `taskitem.created_at` is a timestamptz (recommended).
+ * - If it's a naive timestamp, Postgres will treat it as local time on the DB server.
+ */
+export async function getTaskItemsTodayByUser(req, res) {
+  try {
+    const { userId } = req.params;
+    const tz = (req.query.tz || "UTC").toString();
+
+    if (!userId) {
+      return res.status(400).json({ message: "userId is required" });
+    }
+
+    // Match "today" by converting both created_at and now() into the requested timezone,
+    // then compare their DATE components.
+    const rows = await sql`
+      SELECT ti.*
+      FROM taskitem ti
+      JOIN tasktype tt ON tt.id = ti.tasktypeid
+      WHERE tt.user_id = ${userId}
+        AND (ti.created_at AT TIME ZONE ${tz})::date = (NOW() AT TIME ZONE ${tz})::date
+      ORDER BY ti.created_at DESC, ti.id DESC
+    `;
+
+    return res.status(200).json(rows);
+  } catch (error) {
+    return logAnd500(res, "Error getting today's task items by user", error);
+  }
+}
