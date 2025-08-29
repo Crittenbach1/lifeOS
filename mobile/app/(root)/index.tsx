@@ -17,10 +17,10 @@ type TaskItem = {
   id: number;
   tasktypeid: number;
   name: string | null;
-  amount: number | null; // normalized below
+  amount: number | null;
   description: string | null;
   taskcategory: string | null;
-  created_at: string; // from DB
+  created_at: string;
   updated_at: string;
 };
 
@@ -33,13 +33,11 @@ export default function Page() {
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // With server mount: app.use("/api/taskItem", taskItemRoutes)
-  // and router path: router.get("/today/:userId", ...)
   const url = useMemo(() => {
     if (!user?.id) return null;
-    return `${API_URL}/taskItem/today/${encodeURIComponent(
-      user.id
-    )}?tz=${encodeURIComponent(TZ)}`;
+    const u = `${API_URL}/taskItem/today/${encodeURIComponent(user.id)}?tz=${encodeURIComponent(TZ)}`;
+    console.log("fetch URL:", u);
+    return u;
   }, [user?.id]);
 
   const fetchToday = useCallback(async () => {
@@ -49,25 +47,20 @@ export default function Page() {
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        // capture text for easier debugging
-        let body: any = "";
-        try {
-          body = await res.text();
-        } catch {}
+        let body = "";
+        try { body = await res.text(); } catch {}
         throw new Error(`HTTP ${res.status}${body ? ` - ${body}` : ""}`);
       }
       const raw = await res.json();
+      console.log("today items raw:", raw);
 
-      const normalized: TaskItem[] = (Array.isArray(raw) ? raw : []).map(
-        (r: any) => ({
-          ...r,
-          amount:
-            r.amount === null || r.amount === undefined || r.amount === ""
-              ? null
-              : Number(r.amount),
-        })
-      );
-
+      const normalized: TaskItem[] = (Array.isArray(raw) ? raw : []).map((r: any) => ({
+        ...r,
+        amount:
+          r.amount === null || r.amount === undefined || r.amount === ""
+            ? null
+            : Number(r.amount),
+      }));
       setItems(normalized);
     } catch (e: any) {
       console.error("Failed to load today's task items:", e);
@@ -93,20 +86,25 @@ export default function Page() {
   if (!isLoaded) return <PageLoader />;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
+    <View style={{ flex: 1, backgroundColor: "white" }}>
+      {/* One ScrollView controls the whole page layout */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Card at top */}
         <TaskCard />
 
+        {/* List immediately after the card */}
         <SignedIn>
-          <View style={{ marginTop: 24 }}>
+          <View style={{ marginTop: 16 }}>
             <Text style={{ fontSize: 18, fontWeight: "700", marginBottom: 8 }}>
               Completed Today (EST)
             </Text>
 
             {errorMsg ? (
-              <Text style={{ color: "#b00020", marginBottom: 8 }}>
-                {errorMsg}
-              </Text>
+              <Text style={{ color: "#b00020", marginBottom: 8 }}>{errorMsg}</Text>
             ) : null}
 
             {loading ? (
@@ -114,64 +112,46 @@ export default function Page() {
             ) : items.length === 0 ? (
               <Text style={{ opacity: 0.6 }}>No items yet today.</Text>
             ) : (
-              <ScrollView
-                style={{ maxHeight: 320 }}
-                refreshControl={
-                  <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={onRefresh}
-                  />
-                }
-              >
+              <View>
                 {items.map((it) => (
                   <View
                     key={it.id}
                     style={{
-                      paddingVertical: 10,
+                      paddingVertical: 8,
                       borderBottomWidth: 1,
                       borderBottomColor: "#eee",
                     }}
                   >
-                    <Text style={{ fontWeight: "600" }}>
-                      {it.name ?? "Untitled task"}
-                    </Text>
-
-                    <Text style={{ opacity: 0.7 }}>
-                      {it.taskcategory ? `${it.taskcategory} • ` : ""}
-                      {it.amount !== null && !Number.isNaN(it.amount)
-                        ? formatCurrency(it.amount)
-                        : "—"}
-                    </Text>
-
-                    <Text style={{ opacity: 0.6 }}>
+                    {/* One line: Name | Amount | Completed at time */}
+                    <Text numberOfLines={1} ellipsizeMode="tail">
+                      <Text style={{ fontWeight: "600" }}>{formatName(it.name)}</Text>
+                      {" | "}
+                      {it.amount !== null && !Number.isNaN(it.amount) ? formatCurrency(it.amount) : "—"}
+                      {" | "}
                       {formatInTZ(it.created_at, TZ)}
                     </Text>
-
-                    {it.description ? (
-                      <Text style={{ marginTop: 4, opacity: 0.75 }}>
-                        {it.description}
-                      </Text>
-                    ) : null}
                   </View>
                 ))}
-              </ScrollView>
+              </View>
             )}
           </View>
         </SignedIn>
 
         <SignedOut>
-          <Text style={{ marginTop: 24, opacity: 0.7 }}>
+          <Text style={{ marginTop: 16, opacity: 0.7 }}>
             Sign in to see today’s completed items.
           </Text>
         </SignedOut>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
-/** Format a DB timestamp in a target timezone (EST/EDT) */
+function formatName(name: string | null) {
+  return name?.trim().length ? name.trim() : "Untitled task";
+}
+
 function formatInTZ(ts: string, timeZone: string) {
-  // If timestamp is naive (no Z or offset), assume UTC to avoid device-local ambiguity.
   const looksNaive =
     ts &&
     /\d{2}:\d{2}:\d{2}/.test(ts) &&
