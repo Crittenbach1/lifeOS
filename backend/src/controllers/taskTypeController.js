@@ -8,9 +8,9 @@ const HHMM_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 // Allow [] to mean "unscheduled"
 function validateSchedules(schedules) {
-  if (schedules == null) return true;                           // treat missing as unscheduled
+  if (schedules == null) return true; // treat missing as unscheduled
   if (!Array.isArray(schedules)) return false;
-  if (schedules.length === 0) return true;                      // unscheduled OK
+  if (schedules.length === 0) return true; // unscheduled OK
   for (const entry of schedules) {
     if (
       typeof entry !== "object" ||
@@ -22,7 +22,6 @@ function validateSchedules(schedules) {
     ) {
       return false;
     }
-    // if the day is present, we can allow [] times (means no releases that day)
     for (const t of entry.times) {
       if (typeof t !== "string" || !HHMM_RE.test(t)) return false;
     }
@@ -47,14 +46,17 @@ function sanitizeCategories(categories) {
   return out;
 }
 
-// Build a Postgres TEXT[] literal safely for Neon.
-function textArrayParam(values) {
+/**
+ * Build a SQL fragment for a Postgres TEXT[] value without using sql.join.
+ * If empty -> ARRAY[]::text[]
+ * Else     -> ARRAY(SELECT json_array_elements_text($json::json))::text[]
+ */
+function categoriesArrayExpr(values) {
   const cats = sanitizeCategories(values);
   if (cats.length === 0) {
     return sql`ARRAY[]::text[]`;
   }
-  const quoted = cats.map((v) => sql`${v}`);
-  return sql`ARRAY[${sql.join(quoted, sql`, `)}]::text[]`;
+  return sql`ARRAY(SELECT json_array_elements_text(${JSON.stringify(cats)}::json))::text[]`;
 }
 
 function coerceNonNegativeInt(value, fallback = 0) {
@@ -171,9 +173,9 @@ export async function createTaskType(req, res) {
 
     const inserted = await sql`
       INSERT INTO tasktype (
-        user_id, name, schedules, priority, trackBy, categories,
-        defaultAmount,                      -- NEW
-        yearlyGoal, monthlyGoal, weeklyGoal, dailyGoal, is_active
+        user_id, name, schedules, priority, "trackBy", categories,
+        "defaultAmount",
+        "yearlyGoal", "monthlyGoal", "weeklyGoal", "dailyGoal", is_active
       )
       VALUES (
         ${user_id},
@@ -181,7 +183,7 @@ export async function createTaskType(req, res) {
         ${JSON.stringify(schedJson)}::jsonb,
         ${pr},
         ${trackBy.trim()},
-        ${textArrayParam(categories)},
+        ${categoriesArrayExpr(categories)},
         ${defAmt},
         ${yg}, ${mg}, ${wg}, ${dg},
         ${active}
@@ -213,54 +215,48 @@ export async function updateTaskType(req, res) {
       is_active,
     } = req.body;
 
-    const fields = [];
-
-    if (typeof name === "string") fields.push(sql`name = ${name.trim()}`);
-
-    if (schedules !== undefined) {
-      if (!validateSchedules(schedules)) {
-        return res.status(400).json({
-          message: "Invalid schedules (use HH:MM 24h times or leave empty for unscheduled)",
-        });
-      }
-      const schedJson = Array.isArray(schedules) ? schedules : [];
-      fields.push(sql`schedules = ${JSON.stringify(schedJson)}::jsonb`);
+    // Validate when present
+    if (schedules !== undefined && !validateSchedules(schedules)) {
+      return res.status(400).json({
+        message: "Invalid schedules (use HH:MM 24h times or leave empty for unscheduled)",
+      });
     }
-
     if (priority !== undefined) {
       const pr = Number(priority);
       if (!Number.isFinite(pr) || pr < 1 || pr > 10) {
         return res.status(400).json({ message: "priority must be 1..10" });
       }
-      fields.push(sql`priority = ${pr}`);
     }
 
-    if (typeof trackBy === "string") fields.push(sql`trackBy = ${trackBy.trim()}`);
+    // Build expressions (NULL means “leave unchanged” via COALESCE below)
+    const nameExpr        = name        === undefined ? sql`NULL` : sql`${String(name).trim()}`;
+    const trackByExpr     = trackBy     === undefined ? sql`NULL` : sql`${String(trackBy).trim()}`;
+    const prExpr          = priority    === undefined ? sql`NULL` : sql`${Number(priority)}`;
+    const schedExpr       = schedules   === undefined ? sql`NULL` : sql`${JSON.stringify(Array.isArray(schedules) ? schedules : [])}::jsonb`;
+    const catsExpr        = categories  === undefined ? sql`NULL` : categoriesArrayExpr(categories);
+    const defAmtExpr      = defaultAmount === undefined ? sql`NULL` : sql`${coerceNullableNumber(defaultAmount)}`;
+    const ygExpr          = yearlyGoal  === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(yearlyGoal, 0)}`;
+    const mgExpr          = monthlyGoal === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(monthlyGoal, 0)}`;
+    const wgExpr          = weeklyGoal  === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(weeklyGoal, 0)}`;
+    const dgExpr          = dailyGoal   === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(dailyGoal, 0)}`;
+    const activeExpr      = is_active   === undefined ? sql`NULL` : sql`${Boolean(is_active)}`;
 
-    if (categories !== undefined) {
-      fields.push(sql`categories = ${textArrayParam(categories)}`);
-    }
-
-    if (defaultAmount !== undefined) {
-      fields.push(sql`defaultAmount = ${coerceNullableNumber(defaultAmount)}`);
-    }
-
-    if (yearlyGoal !== undefined) fields.push(sql`yearlyGoal = ${coerceNonNegativeInt(yearlyGoal, 0)}`);
-    if (monthlyGoal !== undefined) fields.push(sql`monthlyGoal = ${coerceNonNegativeInt(monthlyGoal, 0)}`);
-    if (weeklyGoal !== undefined) fields.push(sql`weeklyGoal = ${coerceNonNegativeInt(weeklyGoal, 0)}`);
-    if (dailyGoal !== undefined) fields.push(sql`dailyGoal = ${coerceNonNegativeInt(dailyGoal, 0)}`);
-
-    if (is_active !== undefined) fields.push(sql`is_active = ${Boolean(is_active)}`);
-
-    if (fields.length === 0) {
-      return res.status(400).json({ message: "No fields to update" });
-    }
-
-    fields.push(sql`updated_at = NOW()`);
-
+    // One UPDATE with COALESCE keeps current value when incoming is NULL
     const updated = await sql`
       UPDATE tasktype
-      SET ${sql.join(fields, sql`, `)}
+      SET
+        name            = COALESCE(${nameExpr}, name),
+        schedules       = COALESCE(${schedExpr}, schedules),
+        priority        = COALESCE(${prExpr}, priority),
+        "trackBy"       = COALESCE(${trackByExpr}, "trackBy"),
+        categories      = COALESCE(${catsExpr}, categories),
+        "defaultAmount" = COALESCE(${defAmtExpr}, "defaultAmount"),
+        "yearlyGoal"    = COALESCE(${ygExpr}, "yearlyGoal"),
+        "monthlyGoal"   = COALESCE(${mgExpr}, "monthlyGoal"),
+        "weeklyGoal"    = COALESCE(${wgExpr}, "weeklyGoal"),
+        "dailyGoal"     = COALESCE(${dgExpr}, "dailyGoal"),
+        is_active       = COALESCE(${activeExpr}, is_active),
+        updated_at      = NOW()
       WHERE id = ${id}
       RETURNING *
     `;
