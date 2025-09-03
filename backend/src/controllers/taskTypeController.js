@@ -55,6 +55,7 @@ function categoriesArrayExpr(values) {
   const cats = sanitizeCategories(values);
   if (cats.length === 0) {
     return sql`ARRAY[]::text[]`;
+    // returns a typed empty text[]
   }
   return sql`ARRAY(SELECT json_array_elements_text(${JSON.stringify(cats)}::json))::text[]`;
 }
@@ -171,11 +172,12 @@ export async function createTaskType(req, res) {
 
     const defAmt = coerceNullableNumber(defaultAmount);
 
+    // NOTE: unquoted, lowercase column names
     const inserted = await sql`
       INSERT INTO tasktype (
-        user_id, name, schedules, priority, "trackBy", categories,
-        "defaultAmount",
-        "yearlyGoal", "monthlyGoal", "weeklyGoal", "dailyGoal", is_active
+        user_id, name, schedules, priority, trackby, categories,
+        defaultamount,
+        yearlygoal, monthlygoal, weeklygoal, dailygoal, is_active
       )
       VALUES (
         ${user_id},
@@ -229,34 +231,35 @@ export async function updateTaskType(req, res) {
     }
 
     // Build expressions (NULL means “leave unchanged” via COALESCE below)
-    const nameExpr        = name        === undefined ? sql`NULL` : sql`${String(name).trim()}`;
-    const trackByExpr     = trackBy     === undefined ? sql`NULL` : sql`${String(trackBy).trim()}`;
-    const prExpr          = priority    === undefined ? sql`NULL` : sql`${Number(priority)}`;
-    const schedExpr       = schedules   === undefined ? sql`NULL` : sql`${JSON.stringify(Array.isArray(schedules) ? schedules : [])}::jsonb`;
-    const catsExpr        = categories  === undefined ? sql`NULL` : categoriesArrayExpr(categories);
-    const defAmtExpr      = defaultAmount === undefined ? sql`NULL` : sql`${coerceNullableNumber(defaultAmount)}`;
-    const ygExpr          = yearlyGoal  === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(yearlyGoal, 0)}`;
-    const mgExpr          = monthlyGoal === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(monthlyGoal, 0)}`;
-    const wgExpr          = weeklyGoal  === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(weeklyGoal, 0)}`;
-    const dgExpr          = dailyGoal   === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(dailyGoal, 0)}`;
-    const activeExpr      = is_active   === undefined ? sql`NULL` : sql`${Boolean(is_active)}`;
+    const nameExpr   = name         === undefined ? sql`NULL` : sql`${String(name).trim()}`;
+    const trackExpr  = trackBy      === undefined ? sql`NULL` : sql`${String(trackBy).trim()}`;
+    const prExpr     = priority     === undefined ? sql`NULL` : sql`${Number(priority)}`;
+    const schedExpr  = schedules    === undefined ? sql`NULL` : sql`${JSON.stringify(Array.isArray(schedules) ? schedules : [])}::jsonb`;
+    const catsExpr   = categories   === undefined ? sql`NULL` : categoriesArrayExpr(categories);
+    const defAmtExpr = defaultAmount=== undefined ? sql`NULL` : sql`${coerceNullableNumber(defaultAmount)}`;
+    const ygExpr     = yearlyGoal   === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(yearlyGoal, 0)}`;
+    const mgExpr     = monthlyGoal  === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(monthlyGoal, 0)}`;
+    const wgExpr     = weeklyGoal   === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(weeklyGoal, 0)}`;
+    const dgExpr     = dailyGoal    === undefined ? sql`NULL` : sql`${coerceNonNegativeInt(dailyGoal, 0)}`;
+    const actExpr    = is_active    === undefined ? sql`NULL` : sql`${Boolean(is_active)}`;
 
     // One UPDATE with COALESCE keeps current value when incoming is NULL
+    // NOTE: all column names are unquoted lowercase to match the table
     const updated = await sql`
       UPDATE tasktype
       SET
-        name            = COALESCE(${nameExpr}, name),
-        schedules       = COALESCE(${schedExpr}, schedules),
-        priority        = COALESCE(${prExpr}, priority),
-        "trackBy"       = COALESCE(${trackByExpr}, "trackBy"),
-        categories      = COALESCE(${catsExpr}, categories),
-        "defaultAmount" = COALESCE(${defAmtExpr}, "defaultAmount"),
-        "yearlyGoal"    = COALESCE(${ygExpr}, "yearlyGoal"),
-        "monthlyGoal"   = COALESCE(${mgExpr}, "monthlyGoal"),
-        "weeklyGoal"    = COALESCE(${wgExpr}, "weeklyGoal"),
-        "dailyGoal"     = COALESCE(${dgExpr}, "dailyGoal"),
-        is_active       = COALESCE(${activeExpr}, is_active),
-        updated_at      = NOW()
+        name          = COALESCE(${nameExpr}, name),
+        schedules     = COALESCE(${schedExpr}, schedules),
+        priority      = COALESCE(${prExpr}, priority),
+        trackby       = COALESCE(${trackExpr}, trackby),
+        categories    = COALESCE(${catsExpr}, categories),
+        defaultamount = COALESCE(${defAmtExpr}, defaultamount),
+        yearlygoal    = COALESCE(${ygExpr}, yearlygoal),
+        monthlygoal   = COALESCE(${mgExpr}, monthlygoal),
+        weeklygoal    = COALESCE(${wgExpr}, weeklygoal),
+        dailygoal     = COALESCE(${dgExpr}, dailygoal),
+        is_active     = COALESCE(${actExpr}, is_active),
+        updated_at    = NOW()
       WHERE id = ${id}
       RETURNING *
     `;
