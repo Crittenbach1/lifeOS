@@ -752,8 +752,10 @@ function EditTaskTypeModal({
       }
 
       setBusy(true);
-      const res = await fetch(`${API_URL.replace(/\/$/, "")}/taskType/${encodeURIComponent(String(initial.id))}`, {
-        method: "PUT",
+      const url = `${API_URL.replace(/\/$/, "")}/taskType/${encodeURIComponent(String(initial.id))}`;
+      // IMPORTANT: match your backend route which uses PATCH
+      const res = await fetch(url, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(payload),
       });
