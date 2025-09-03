@@ -6,13 +6,16 @@ import {
   ActivityIndicator,
   Alert,
   TouchableOpacity,
-  ScrollView,
-  RefreshControl,
   TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useUser } from "@clerk/clerk-expo";
 import { API_URL } from "../constants/api";
+
+type Props = {
+  /** Called after a successful completion so the parent can refresh its list */
+  onCompleted?: () => void;
+};
 
 type Schedule = { dayOfWeek: number; times: string[] };
 type TaskTypeRow = {
@@ -21,8 +24,8 @@ type TaskTypeRow = {
   name: string;
   schedules?: Schedule[];          // may be undefined or []
   priority: number;                // 1 = highest
-  trackby?: string;                // some backends send lowercase
-  trackBy?: string;                // DB column (folds to lowercase)
+  trackby?: string;                // backend lowercase
+  trackBy?: string;                // DB camelCase (folds to lowercase)
   categories?: string[];
   defaultAmount?: number | null;   // support both casings
   defaultamount?: number | null;
@@ -73,18 +76,29 @@ function endOfToday(): Date {
   d.setHours(23, 59, 59, 999);
   return d;
 }
+function startOfDay(ms: number) {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+function daysSinceMs(ms: number | null) {
+  if (ms == null) return 9999; // treat "never" as very starved
+  const nowStart = startOfToday().getTime();
+  const thenStart = startOfDay(ms);
+  const DAY = 86_400_000;
+  return Math.max(0, Math.floor((nowStart - thenStart) / DAY));
+}
 
-export default function TaskCard() {
+export default function TaskCard({ onCompleted }: Props) {
   const { user, isLoaded } = useUser();
 
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [taskTypes, setTaskTypes] = useState<TaskTypeRow[]>([]);
   const [now, setNow] = useState<Date>(new Date());
   const [busy, setBusy] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  const [amount, setAmount] = useState(""); // used only when there's no default amount
+  const [amount, setAmount] = useState(""); // when there's no default amount
   const [description, setDescription] = useState("");
 
   // Completed keys for *today*: `${taskTypeID}-${hhmm}` (scheduled-only marker)
@@ -94,7 +108,11 @@ export default function TaskCard() {
   const [unschedIdx, setUnschedIdx] = useState(0);
 
   // Per-taskType category pointer (cycles through tt.categories)
+  // Hydrated from DB based on last completed item's category.
   const [categoryIndexByType, setCategoryIndexByType] = useState<Record<number, number>>({});
+
+  // keep the latest completion time for each type (for starvation sort)
+  const [lastDoneAtByType, setLastDoneAtByType] = useState<Record<number, number | null>>({});
 
   const minuteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const midnightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,6 +123,7 @@ export default function TaskCard() {
     const base = API_URL.replace(/\/$/, "");
     const urls = [
       `${base}/taskType/user/${encodeURIComponent(user.id)}?is_active=true`,
+      // fallback variant some backends support:
       `${base}/taskType?user_id=${encodeURIComponent(user.id)}&is_active=true`,
     ];
     const errors: string[] = [];
@@ -123,41 +142,75 @@ export default function TaskCard() {
     throw new Error(errors.join(" | "));
   }, [user?.id]);
 
-  const fetchTaskItemsForTypeToday = useCallback(async (taskTypeID: number) => {
+  /**
+   * Return:
+   *  - how many items logged today
+   *  - latest item timestamp
+   *  - latest *categorized* item’s category (used to advance to "next" category)
+   */
+  const fetchTaskMetaForType = useCallback(async (taskTypeID: number) => {
     const base = API_URL.replace(/\/$/, "");
     const res = await fetch(`${base}/taskItem/type/${encodeURIComponent(taskTypeID)}`, {
       headers: { Accept: "application/json" },
     });
     const body = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status} – ${body || "No body"}`);
-    const items = JSON.parse(body) as Array<{ id: number; created_at: string }>;
+    const items = JSON.parse(body) as Array<{ id: number; created_at: string; taskcategory?: string | null }>;
 
     const start = startOfToday().getTime();
     const end = endOfToday().getTime();
-    const countToday = items.filter((it) => {
-      const t = new Date(it.created_at).getTime();
-      return t >= start && t <= end;
-    }).length;
 
-    return countToday;
+    let countToday = 0;
+    let lastAt: number | null = null;
+
+    for (const it of items) {
+      const t = new Date(it.created_at).getTime();
+      if (t >= start && t <= end) countToday++;
+      if (lastAt == null || t > lastAt) lastAt = t;
+    }
+
+    // Determine the most recent item that has a taskcategory set
+    let lastCategory: string | null = null;
+    items
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .some((it) => {
+        if (it.taskcategory && `${it.taskcategory}`.trim().length > 0) {
+          lastCategory = it.taskcategory.trim();
+          return true;
+        }
+        return false;
+      });
+
+    return { countToday, lastAt, lastCategory };
   }, []);
 
+  /**
+   * Hydrate:
+   *  - completedToday for scheduled occurrences
+   *  - lastDoneAtByType (used for starvation)
+   *  - categoryIndexByType based on the *last completed category* in DB
+   *    → next category = (indexOf(lastCategory) + 1) % categories.length
+   */
   const hydrateCompletedFromDB = useCallback(
     async (rows: TaskTypeRow[]) => {
       const active = rows.filter((t) => t.is_active);
-      const counts = await Promise.all(
+
+      const metas = await Promise.all(
         active.map(async (tt) => {
           try {
-            const c = await fetchTaskItemsForTypeToday(tt.id);
-            return { id: tt.id, count: c };
+            const m = await fetchTaskMetaForType(tt.id);
+            return { id: tt.id, ...m };
           } catch {
-            return { id: tt.id, count: 0 };
+            return { id: tt.id, countToday: 0, lastAt: null as number | null, lastCategory: null as string | null };
           }
         })
       );
 
       const day = new Date().getDay();
       const completedMap: Record<string, boolean> = {};
+      const lastDoneMap: Record<number, number | null> = {};
+      const nextCategoryPointer: Record<number, number> = {};
 
       for (const tt of active) {
         const sched = (tt.schedules ?? []).find((s) => Number(s.dayOfWeek) === day);
@@ -167,27 +220,41 @@ export default function TaskCard() {
           return ah === bh ? am - bm : ah - bh;
         });
 
-        const cObj = counts.find((c) => c.id === tt.id);
-        const count = Math.max(0, Math.min(cObj?.count ?? 0, times.length));
+        const m = metas.find((x) => x.id === tt.id);
+        lastDoneMap[tt.id] = m?.lastAt ?? null;
 
+        // mark N earliest scheduled times as completed for today (N = countToday)
+        const count = Math.max(0, Math.min(m?.countToday ?? 0, times.length));
         for (let i = 0; i < count; i++) {
           const key = `${tt.id}-${times[i]}`;
           completedMap[key] = true;
         }
+
+        // Build category pointer from DB lastCategory -> next
+        const list = tt?.categories ?? [];
+        if (list.length > 0) {
+          const lastCat = (m?.lastCategory ?? null) as string | null;
+          const idxLast = lastCat ? list.findIndex((c) => c === lastCat) : -1;
+          const nextIdx = (idxLast >= 0 ? idxLast + 1 : 0) % list.length;
+          nextCategoryPointer[tt.id] = nextIdx;
+        }
       }
 
       setCompletedToday(completedMap);
+      setLastDoneAtByType(lastDoneMap);
+      setCategoryIndexByType((prev) => ({ ...prev, ...nextCategoryPointer }));
     },
-    [fetchTaskItemsForTypeToday]
+    [fetchTaskMetaForType]
   );
 
   const mergeCategoryIndices = useCallback((rows: TaskTypeRow[]) => {
+    // Ensure every active type has some pointer (0 by default) so reads are safe.
     setCategoryIndexByType((prev) => {
       const next: Record<number, number> = { ...prev };
-      for (const r of rows) if (next[r.id] == null) next[r.id] = 0;
+      for (const r of rows) if (r.is_active && next[r.id] == null) next[r.id] = 0;
       for (const idStr of Object.keys(next)) {
         const id = Number(idStr);
-        if (!rows.find((r) => r.id === id)) delete next[id];
+        if (!rows.find((r) => r.id === id && r.is_active)) delete next[id];
       }
       return next;
     });
@@ -210,25 +277,9 @@ export default function TaskCard() {
     }
   }, [fetchTaskTypes, hydrateCompletedFromDB, isLoaded, user?.id, mergeCategoryIndices]);
 
-  const onRefresh = useCallback(async () => {
-    if (!user?.id) return;
-    setRefreshing(true);
-    setLastError(null);
-    try {
-      const rows = await fetchTaskTypes();
-      setTaskTypes(rows || []);
-      mergeCategoryIndices(rows || []);
-      await hydrateCompletedFromDB(rows || []);
-      setNow(new Date());
-    } catch (e: any) {
-      setLastError(e?.message ?? "Failed to refresh.");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [fetchTaskTypes, hydrateCompletedFromDB, user?.id, mergeCategoryIndices]);
-
   useEffect(() => { if (isLoaded) load(); }, [isLoaded, load]);
 
+  // tick every minute so "current" releases update
   useEffect(() => {
     function armMinute() {
       if (minuteTimer.current) clearTimeout(minuteTimer.current);
@@ -241,6 +292,7 @@ export default function TaskCard() {
     return () => { if (minuteTimer.current) clearTimeout(minuteTimer.current); };
   }, []);
 
+  // reset at midnight
   useEffect(() => {
     function armMidnight() {
       if (midnightTimer.current) clearTimeout(midnightTimer.current);
@@ -292,7 +344,7 @@ export default function TaskCard() {
     return null;
   }, [taskTypes, now, completedToday]);
 
-  // --- Unscheduled fallback list ---
+  // --- Unscheduled list (starvation-based only; NO urgent-from-skip) ---
   const unscheduledList = useMemo(() => {
     const isUnscheduled = (tt: TaskTypeRow) => {
       const scheds = tt?.schedules ?? [];
@@ -300,10 +352,31 @@ export default function TaskCard() {
       return scheds.every((s) => !s?.times || s.times.length === 0);
     };
 
-    return taskTypes
-      .filter((tt) => tt.is_active && isUnscheduled(tt))
-      .sort((a, b) => (a.priority - b.priority) || (a.id - b.id));
-  }, [taskTypes]);
+    const candidateIDs = new Set<number>(
+      taskTypes.filter((tt) => tt.is_active && isUnscheduled(tt)).map((tt) => tt.id)
+    );
+
+    type Row = {
+      tt: TaskTypeRow;
+      daysSince: number;   // "starvation"
+    };
+
+    const rows: Row[] = [];
+    for (const id of candidateIDs) {
+      const tt = taskTypes.find((t) => t.id === id)!;
+      const lastAt = lastDoneAtByType[id] ?? null;
+      const daysSince = daysSinceMs(lastAt);
+      rows.push({ tt, daysSince });
+    }
+
+    rows.sort((a, b) => {
+      if (b.daysSince !== a.daysSince) return b.daysSince - a.daysSince; // starvation desc
+      if (a.tt.priority !== b.tt.priority) return a.tt.priority - b.tt.priority; // 1 is highest
+      return a.tt.id - b.tt.id;
+    });
+
+    return rows.map((r) => r.tt);
+  }, [taskTypes, lastDoneAtByType]);
 
   useEffect(() => {
     if (!unscheduledList.length) setUnschedIdx(0);
@@ -324,7 +397,6 @@ export default function TaskCard() {
     return tt?.trackby ?? tt?.trackBy ?? "";
   }, []);
 
-  // Keep nulls as null; don't coerce to 0
   const getDefaultAmount = useCallback((tt?: TaskTypeRow | null): number | null => {
     const raw = (tt as any)?.defaultAmount ?? (tt as any)?.defaultamount;
     if (raw === null || raw === undefined) return null;
@@ -335,8 +407,8 @@ export default function TaskCard() {
   const getCurrentCategory = useCallback(
     (tt: TaskTypeRow | null | undefined): string | null => {
       const list = tt?.categories ?? [];
-      if (!list.length) return null;
-      const idx = categoryIndexByType[tt!.id] ?? 0;
+      if (!list.length || !tt) return null;
+      const idx = categoryIndexByType[tt.id] ?? 0;
       return list[idx % list.length] ?? null;
     },
     [categoryIndexByType]
@@ -379,8 +451,7 @@ export default function TaskCard() {
           taskTypeID: currentScheduled.taskTypeID,
           name: tt?.name ?? currentScheduled.taskName ?? null,
           amount: amt,
-          description:
-            description || `Completed at ${formatTime(new Date())} (${currentScheduled.hhmm})`,
+          description: description || `Completed at ${formatTime(new Date())}`,
           taskCategory: chosenCategory ?? null,
         };
 
@@ -395,9 +466,14 @@ export default function TaskCard() {
         }
 
         setCompletedToday((prev) => ({ ...prev, [key]: true }));
+        setLastDoneAtByType((prev) => ({ ...prev, [currentScheduled.taskTypeID]: Date.now() }));
+
+        // Advance category pointer locally
         incrementCategory(currentScheduled.taskTypeID);
         setAmount("");
         setDescription("");
+
+        onCompleted?.();
       } else if (currentUnscheduled) {
         const tt = currentUnscheduled;
         const chosenCategory = getCurrentCategory(tt);
@@ -422,8 +498,13 @@ export default function TaskCard() {
           throw new Error(`HTTP ${res.status} – ${body || "No body"}`);
         }
 
+        setLastDoneAtByType((prev) => ({ ...prev, [tt.id]: Date.now() }));
+
+        // Advance category pointer locally
         incrementCategory(tt.id);
         rotateUnscheduled();
+
+        onCompleted?.();
       }
     } catch (e: any) {
       Alert.alert("Save failed", e?.message ?? "Could not create task item.");
@@ -440,16 +521,19 @@ export default function TaskCard() {
     getDefaultAmount,
     incrementCategory,
     rotateUnscheduled,
+    onCompleted,
   ]);
 
-  // --- Skip handling (scheduled: suppress for today; unscheduled: move to next) ---
+  // --- Skip handling ---
   const handleSkip = useCallback(() => {
     if (currentScheduled) {
+      // Suppress this scheduled occurrence for today ONLY. No urgent carryover.
       const key = `${currentScheduled.taskTypeID}-${currentScheduled.hhmm}`;
       setCompletedToday((prev) => ({ ...prev, [key]: true }));
       setAmount("");
       setDescription("");
     } else if (currentUnscheduled) {
+      // For unscheduled, just rotate
       rotateUnscheduled();
     }
   }, [currentScheduled, currentUnscheduled, rotateUnscheduled]);
@@ -457,17 +541,12 @@ export default function TaskCard() {
   // ---------- UI ----------
   if (!isLoaded || loading) {
     return (
-      <ScrollView
-        contentContainerStyle={{ padding: 16, flexGrow: 1 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-        <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, elevation: 3 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <ActivityIndicator />
-            <Text style={{ fontWeight: "600" }}>Loading…</Text>
-          </View>
+      <View style={{ padding: 8 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <ActivityIndicator />
+          <Text style={{ fontWeight: "600" }}>Loading…</Text>
         </View>
-      </ScrollView>
+      </View>
     );
   }
 
@@ -477,7 +556,7 @@ export default function TaskCard() {
     return undefined;
   })();
 
-  const currentTrackBy = getTrackBy(activeTT);
+  const currentTrackBy = (activeTT?.trackby ?? activeTT?.trackBy) || "";
   const defaultAmt = getDefaultAmount(activeTT);
 
   const showingScheduled = !!currentScheduled;
@@ -514,159 +593,153 @@ export default function TaskCard() {
   );
 
   return (
-    <ScrollView
-      contentContainerStyle={{ padding: 16, flexGrow: 1 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      alwaysBounceVertical
-    >
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, elevation: 3 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          {showingScheduled ? (
-            <>
-              <Ionicons name="time-outline" size={18} />
-              <Text style={{ fontSize: 18, fontWeight: "800" }}>Current Task</Text>
-            </>
-          ) : showingUnscheduled ? (
-            <>
-              <Ionicons name="infinite-outline" size={18} />
-              <Text style={{ fontSize: 18, fontWeight: "800" }}>Unscheduled (Loop)</Text>
-            </>
-          ) : (
-            <>
-              <Ionicons name="time-outline" size={18} />
-              <Text style={{ fontSize: 18, fontWeight: "800" }}>Current Task</Text>
-            </>
-          )}
-        </View>
-
-        {lastError ? (
-          <View style={{ backgroundColor: "#fdecea", borderRadius: 8, padding: 8, marginBottom: 8 }}>
-            <Text style={{ color: "#b42318" }}>{lastError}</Text>
-          </View>
-        ) : null}
-
-        {showingScheduled && currentScheduled ? (
+    <View /* content only; parent wraps with card */>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        {showingScheduled ? (
           <>
-            <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentScheduled.taskName}</Text>
-            <Text style={{ opacity: 0.65, marginTop: 4 }}>
-              Scheduled at {formatTime(currentScheduled.scheduledAt)} · Priority {currentScheduled.priority}
-            </Text>
-            {currentCategoryLabel ? (
-              <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
-            ) : null}
-
-            {AmountBlock}
-
-            <TextInput
-              placeholder="Add a description…"
-              value={description}
-              onChangeText={setDescription}
-              style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
-            />
-
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-              <TouchableOpacity
-                onPress={handleComplete}
-                disabled={busy}
-                style={{
-                  flexGrow: 1,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: busy ? "#e5e7eb" : "#111827",
-                  flexDirection: "row",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
-                <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={handleSkip}
-                disabled={busy}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: "#fef3c7",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Ionicons name="play-skip-forward-outline" size={18} />
-                <Text style={{ fontWeight: "700" }}>Skip</Text>
-              </TouchableOpacity>
-            </View>
+            <Ionicons name="time-outline" size={18} />
+            <Text style={{ fontSize: 18, fontWeight: "800" }}>Current Task</Text>
           </>
-        ) : showingUnscheduled && currentUnscheduled ? (
+        ) : showingUnscheduled ? (
           <>
-            <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentUnscheduled.name}</Text>
-            {unscheduledList.length ? (
-              <Text style={{ opacity: 0.65, marginTop: 4 }}>
-                #{(unschedIdx % unscheduledList.length) + 1} of {unscheduledList.length}
-              </Text>
-            ) : null}
-            {currentCategoryLabel ? (
-              <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
-            ) : null}
-
-            {AmountBlock}
-
-            <TextInput
-              placeholder="Add a description…"
-              value={description}
-              onChangeText={setDescription}
-              style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
-            />
-
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-              <TouchableOpacity
-                onPress={handleComplete}
-                disabled={busy}
-                style={{
-                  flexGrow: 1,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: busy ? "#e5e7eb" : "#111827",
-                  flexDirection: "row",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
-                <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={handleSkip}
-                disabled={busy || !unscheduledList.length}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 999,
-                  backgroundColor: "#fef3c7",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Ionicons name="play-skip-forward-outline" size={18} />
-                <Text style={{ fontWeight: "700" }}>Skip</Text>
-              </TouchableOpacity>
-            </View>
+            <Ionicons name="infinite-outline" size={18} />
+            <Text style={{ fontSize: 18, fontWeight: "800" }}>Unscheduled (Loop)</Text>
           </>
         ) : (
-          <Text style={{ opacity: 0.6 }}>
-            Nothing released yet, and no unscheduled loop configured. Pull down to refresh.
-          </Text>
+          <>
+            <Ionicons name="time-outline" size={18} />
+            <Text style={{ fontSize: 18, fontWeight: "800" }}>Current Task</Text>
+          </>
         )}
       </View>
-    </ScrollView>
+
+      {lastError ? (
+        <View style={{ backgroundColor: "#fdecea", borderRadius: 8, padding: 8, marginBottom: 8 }}>
+          <Text style={{ color: "#b42318" }}>{lastError}</Text>
+        </View>
+      ) : null}
+
+      {showingScheduled && currentScheduled ? (
+        <>
+          <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentScheduled.taskName}</Text>
+          <Text style={{ opacity: 0.65, marginTop: 4 }}>
+            Scheduled at {formatTime(currentScheduled.scheduledAt)} · Priority {currentScheduled.priority}
+          </Text>
+          {currentCategoryLabel ? (
+            <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
+          ) : null}
+
+          {AmountBlock}
+
+          <TextInput
+            placeholder="Add a description…"
+            value={description}
+            onChangeText={setDescription}
+            style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
+          />
+
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+            <TouchableOpacity
+              onPress={handleComplete}
+              disabled={busy}
+              style={{
+                flexGrow: 1,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 999,
+                backgroundColor: busy ? "#e5e7eb" : "#111827",
+                flexDirection: "row",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
+              <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleSkip}
+              disabled={busy}
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 999,
+                backgroundColor: "#fef3c7",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Ionicons name="play-skip-forward-outline" size={18} />
+              <Text style={{ fontWeight: "700" }}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : showingUnscheduled && currentUnscheduled ? (
+        <>
+          <Text style={{ fontWeight: "700", fontSize: 16 }}>{currentUnscheduled.name}</Text>
+          {unscheduledList.length ? (
+            <Text style={{ opacity: 0.65, marginTop: 4 }}>
+              #{(unschedIdx % unscheduledList.length) + 1} of {unscheduledList.length}
+            </Text>
+          ) : null}
+          {currentCategoryLabel ? (
+            <Text style={{ marginTop: 4, fontStyle: "italic" }}>Category: {currentCategoryLabel}</Text>
+          ) : null}
+
+          {AmountBlock}
+
+          <TextInput
+            placeholder="Add a description…"
+            value={description}
+            onChangeText={setDescription}
+            style={{ marginTop: 8, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 8 }}
+          />
+
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+            <TouchableOpacity
+              onPress={handleComplete}
+              disabled={busy}
+              style={{
+                flexGrow: 1,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 999,
+                backgroundColor: busy ? "#e5e7eb" : "#111827",
+                flexDirection: "row",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark" size={18} color="#fff" />}
+              <Text style={{ color: "#fff", fontWeight: "700" }}>{busy ? "Saving…" : "Complete"}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleSkip}
+              disabled={busy || !unscheduledList.length}
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 999,
+                backgroundColor: "#fef3c7",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Ionicons name="play-skip-forward-outline" size={18} />
+              <Text style={{ fontWeight: "700" }}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : (
+        <Text style={{ opacity: 0.6 }}>
+          Nothing released yet, and no unscheduled loop configured. Pull down to refresh.
+        </Text>
+      )}
+    </View>
   );
 }
